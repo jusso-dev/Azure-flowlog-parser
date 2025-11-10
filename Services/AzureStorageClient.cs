@@ -1,6 +1,8 @@
 using Azure.Identity;
 using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
+using Azure.Core.Diagnostics;
+using System.Diagnostics.Tracing;
 
 namespace AzureFlowLogParser.Services;
 
@@ -10,23 +12,130 @@ namespace AzureFlowLogParser.Services;
 public class AzureStorageClient
 {
     private readonly BlobServiceClient _blobServiceClient;
+    private readonly string _storageAccountName;
 
     /// <summary>
     /// Initializes the Azure Storage client with MSI authentication
     /// </summary>
     /// <param name="storageAccountName">The name of the storage account</param>
-    public AzureStorageClient(string storageAccountName)
+    /// <param name="verbose">Enable verbose logging for authentication diagnostics</param>
+    public AzureStorageClient(string storageAccountName, bool verbose = false)
     {
+        _storageAccountName = storageAccountName;
         var storageUri = new Uri($"https://{storageAccountName}.blob.core.windows.net");
 
+        if (verbose)
+        {
+            Console.Error.WriteLine($"Initializing Azure Storage client for: {storageAccountName}");
+            Console.Error.WriteLine($"Storage URI: {storageUri}");
+            Console.Error.WriteLine("Authentication: Using DefaultAzureCredential");
+            Console.Error.WriteLine("  Credential chain will attempt (in order):");
+            Console.Error.WriteLine("    1. Environment variables (AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_TENANT_ID)");
+            Console.Error.WriteLine("    2. Managed Identity (if running in Azure)");
+            Console.Error.WriteLine("    3. Azure CLI (az login)");
+            Console.Error.WriteLine("    4. Azure PowerShell");
+            Console.Error.WriteLine("    5. Visual Studio / VS Code credentials");
+        }
+
         // Use DefaultAzureCredential which supports:
+        // - Environment variables (AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_TENANT_ID)
         // - Managed Identity (MSI) in Azure
         // - Azure CLI credentials for local development
-        // - Environment variables
         // - Visual Studio/VS Code credentials
-        var credential = new DefaultAzureCredential();
+        var credentialOptions = new DefaultAzureCredentialOptions
+        {
+            ExcludeVisualStudioCredential = false,
+            ExcludeVisualStudioCodeCredential = false,
+            ExcludeAzureCliCredential = false,
+            ExcludeManagedIdentityCredential = false,
+            ExcludeEnvironmentCredential = false,
+            ExcludeAzurePowerShellCredential = false,
+            // Add retry options
+            Retry =
+            {
+                MaxRetries = 3,
+                NetworkTimeout = TimeSpan.FromSeconds(30)
+            }
+        };
+
+        var credential = new DefaultAzureCredential(credentialOptions);
 
         _blobServiceClient = new BlobServiceClient(storageUri, credential);
+
+        if (verbose)
+        {
+            Console.Error.WriteLine("Azure Storage client initialized successfully");
+        }
+    }
+
+    /// <summary>
+    /// Tests authentication by attempting to list containers
+    /// </summary>
+    /// <returns>True if authentication is successful</returns>
+    public async Task<bool> TestAuthenticationAsync(bool verbose = false)
+    {
+        try
+        {
+            if (verbose)
+                Console.Error.WriteLine($"Testing authentication for storage account: {_storageAccountName}");
+
+            // Attempt to list containers (minimal permission required)
+            var containers = _blobServiceClient.GetBlobContainersAsync();
+            await foreach (var _ in containers.Take(1))
+            {
+                // Successfully authenticated and can access storage
+                break;
+            }
+
+            if (verbose)
+                Console.Error.WriteLine("  ✓ Authentication successful");
+
+            return true;
+        }
+        catch (Azure.RequestFailedException ex)
+        {
+            Console.Error.WriteLine($"  ✗ Authentication failed for storage account '{_storageAccountName}'");
+            Console.Error.WriteLine($"    Error: {ex.Message}");
+            Console.Error.WriteLine($"    Status: {ex.Status}");
+            Console.Error.WriteLine($"    Error Code: {ex.ErrorCode}");
+
+            PrintAuthenticationHelp();
+            return false;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"  ✗ Unexpected error during authentication test: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Prints helpful authentication troubleshooting information
+    /// </summary>
+    private static void PrintAuthenticationHelp()
+    {
+        Console.Error.WriteLine();
+        Console.Error.WriteLine("Authentication Troubleshooting:");
+        Console.Error.WriteLine();
+        Console.Error.WriteLine("For LOCAL DEVELOPMENT:");
+        Console.Error.WriteLine("  1. Run 'az login' to authenticate with Azure CLI");
+        Console.Error.WriteLine("  2. Run 'az account show' to verify you're logged in");
+        Console.Error.WriteLine("  3. Ensure you have 'Storage Blob Data Reader' role on the storage account");
+        Console.Error.WriteLine();
+        Console.Error.WriteLine("For AZURE ENVIRONMENT (VM, Container, App Service, etc.):");
+        Console.Error.WriteLine("  1. Enable Managed Identity on your Azure resource");
+        Console.Error.WriteLine("  2. Grant the identity 'Storage Blob Data Reader' role:");
+        Console.Error.WriteLine("     az role assignment create \\");
+        Console.Error.WriteLine("       --role 'Storage Blob Data Reader' \\");
+        Console.Error.WriteLine("       --assignee <managed-identity-principal-id> \\");
+        Console.Error.WriteLine("       --scope /subscriptions/<sub-id>/resourceGroups/<rg>/providers/Microsoft.Storage/storageAccounts/<account>");
+        Console.Error.WriteLine();
+        Console.Error.WriteLine("For SERVICE PRINCIPAL:");
+        Console.Error.WriteLine("  Set environment variables:");
+        Console.Error.WriteLine("    export AZURE_CLIENT_ID='<client-id>'");
+        Console.Error.WriteLine("    export AZURE_CLIENT_SECRET='<client-secret>'");
+        Console.Error.WriteLine("    export AZURE_TENANT_ID='<tenant-id>'");
+        Console.Error.WriteLine();
     }
 
     /// <summary>
