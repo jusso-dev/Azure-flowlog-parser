@@ -1,0 +1,15 @@
+# Example storage accounts file
+# You can list storage account names one per line or comma-separated
+# Lines starting with # are ignored
+# Empty lines are ignored
+
+storageaccount1
+storageaccount2
+storageaccount3
+
+# Or use comma-separated format:
+# storageaccount1,storageaccount2,storageaccount3
+
+# Mixed format also works:
+# storageaccount4, storageaccount5
+# storageaccount6

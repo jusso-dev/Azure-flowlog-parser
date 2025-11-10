@@ -5,8 +5,9 @@ A .NET 9 CLI tool that fetches Azure virtual network flow logs from Azure Storag
 ## Features
 
 - **MSI Authentication**: Uses Azure Managed Identity for secure, credential-less authentication
+- **Multiple Storage Accounts**: Process flow logs from multiple storage accounts using file, environment variable, or Azure Key Vault
 - **Compatible Format**: Parses flow logs in the same format as [PaloAlto Cortex Azure Functions](https://github.com/PaloAltoNetworks/cortex-azure-functions/tree/master/vnet-flow-logs)
-- **Flexible Output**: Supports JSON and JSON Lines (JSONL) output formats
+- **Flexible Output**: Supports JSON and JSON Lines (JSONL) output formats, with merged or separate output per account
 - **Filtering**: Filter blobs by prefix and limit the number of processed files
 - **Local Development**: Supports Azure CLI credentials for local testing
 
@@ -21,7 +22,7 @@ A .NET 9 CLI tool that fetches Azure virtual network flow logs from Azure Storag
 
 ## Required Azure Permissions
 
-The Managed Identity or user account needs the **Storage Blob Data Reader** role on the storage account containing the flow logs.
+The Managed Identity or user account needs the **Storage Blob Data Reader** role on the storage account(s) containing the flow logs.
 
 ```bash
 # Assign role to a managed identity
@@ -29,6 +30,16 @@ az role assignment create \
   --role "Storage Blob Data Reader" \
   --assignee <managed-identity-principal-id> \
   --scope /subscriptions/<subscription-id>/resourceGroups/<resource-group>/providers/Microsoft.Storage/storageAccounts/<storage-account>
+```
+
+When using Azure Key Vault, also grant the **Key Vault Secrets User** role:
+
+```bash
+# Assign Key Vault role
+az role assignment create \
+  --role "Key Vault Secrets User" \
+  --assignee <managed-identity-principal-id> \
+  --scope /subscriptions/<subscription-id>/resourceGroups/<resource-group>/providers/Microsoft.KeyVault/vaults/<keyvault-name>
 ```
 
 ## Installation
@@ -51,11 +62,58 @@ dotnet run -- --storage-account <account-name> [options]
 ### Basic Usage
 
 ```bash
-# Parse all flow logs from the default container
+# Parse all flow logs from a single storage account
 azure-flowlog-parser --storage-account mystorageaccount
 
 # Or using dotnet run
 dotnet run -- --storage-account mystorageaccount
+```
+
+### Multiple Storage Accounts
+
+The tool supports processing flow logs from multiple storage accounts using different sources:
+
+#### 1. From a File
+
+Create a file with storage account names (one per line or comma-separated):
+
+```bash
+# storage-accounts.txt
+storageaccount1
+storageaccount2
+storageaccount3
+```
+
+Then run:
+```bash
+dotnet run -- --accounts-file storage-accounts.txt --verbose
+```
+
+#### 2. From Environment Variable
+
+Set an environment variable with comma-separated storage account names:
+
+```bash
+export AZURE_STORAGE_ACCOUNTS="storageaccount1,storageaccount2,storageaccount3"
+dotnet run -- --accounts-env AZURE_STORAGE_ACCOUNTS --verbose
+```
+
+#### 3. From Azure Key Vault
+
+Store comma-separated storage account names in an Azure Key Vault secret:
+
+```bash
+# Create the secret
+az keyvault secret set \
+  --vault-name myvault \
+  --name storage-accounts \
+  --value "storageaccount1,storageaccount2,storageaccount3"
+
+# Use it in the tool
+dotnet run -- \
+  --accounts-keyvault https://myvault.vault.azure.net/ \
+  --keyvault-secret storage-accounts \
+  --verbose
 ```
 
 ### Advanced Options
@@ -73,18 +131,32 @@ azure-flowlog-parser \
 
 ### Options
 
+#### Storage Account Sources (choose one)
+
+| Option | Alias | Description |
+|--------|-------|-------------|
+| `--storage-account` | `-s` | Single Azure storage account name |
+| `--accounts-file` | `-af` | Path to file containing storage account names |
+| `--accounts-env` | `-ae` | Environment variable name with storage accounts |
+| `--accounts-keyvault` | `-akv` | Azure Key Vault URL |
+| `--keyvault-secret` | `-kvs` | Key Vault secret name (required with --accounts-keyvault) |
+
+#### General Options
+
 | Option | Alias | Description | Default |
 |--------|-------|-------------|---------|
-| `--storage-account` | `-s` | Azure storage account name (required) | - |
 | `--container` | `-c` | Container name | `insights-logs-flowlogflowevent` |
 | `--prefix` | `-p` | Filter blobs by prefix | - |
 | `--output` | `-o` | Output file path (stdout if not specified) | - |
 | `--format` | `-f` | Output format: `json` or `jsonl` | `json` |
-| `--limit` | `-l` | Limit number of blobs to process | - |
+| `--limit` | `-l` | Limit number of blobs per storage account | - |
+| `--merge-output` | `-m` | Merge results from all accounts | `true` |
 | `--verbose` | `-v` | Enable verbose output | `false` |
 | `--list-only` | - | Only list available blobs | `false` |
 
 ### Examples
+
+#### Single Storage Account
 
 ```bash
 # List available blobs without processing
@@ -101,6 +173,31 @@ dotnet run -- -s mystorageaccount --format jsonl --output results.jsonl
 
 # Verbose mode for debugging
 dotnet run -- -s mystorageaccount --verbose
+```
+
+#### Multiple Storage Accounts
+
+```bash
+# Process multiple accounts from a file and merge results
+dotnet run -- --accounts-file storage-accounts.txt --output merged-results.json
+
+# Process multiple accounts and create separate output files
+dotnet run -- --accounts-file storage-accounts.txt --merge-output false --output results.json
+# This creates: results_storageaccount1.json, results_storageaccount2.json, etc.
+
+# Use environment variable with limit per account
+dotnet run -- --accounts-env AZURE_STORAGE_ACCOUNTS --limit 10 --verbose
+
+# Use Key Vault with filtering
+dotnet run -- \
+  --accounts-keyvault https://myvault.vault.azure.net/ \
+  --keyvault-secret storage-accounts \
+  --prefix "resourceId=/SUBSCRIPTIONS/abc123" \
+  --output filtered-results.json \
+  --verbose
+
+# List blobs from multiple accounts
+dotnet run -- --accounts-file storage-accounts.txt --list-only
 ```
 
 ## Output Format
@@ -223,9 +320,38 @@ If you see authentication errors:
 
 Ensure the identity has **Storage Blob Data Reader** role (not just Contributor).
 
+## Multiple Storage Accounts Features
+
+### Output Modes
+
+When processing multiple storage accounts, you can choose between two output modes:
+
+1. **Merged Output** (default, `--merge-output true`):
+   - All flow records from all storage accounts are combined into a single output
+   - Perfect for centralized logging and analysis
+
+2. **Separate Output** (`--merge-output false`):
+   - Each storage account gets its own output file
+   - Files are named with the pattern: `{basename}_{storageaccount}{extension}`
+   - Example: `results.json` → `results_account1.json`, `results_account2.json`, etc.
+
+### Storage Account Name Validation
+
+The tool automatically validates storage account names according to Azure rules:
+- Must be 3-24 characters long
+- Only lowercase letters and numbers allowed
+- Invalid names are skipped with a warning
+
+### Error Handling
+
+- If one storage account fails, processing continues with remaining accounts
+- Errors are logged to stderr while results go to stdout or file
+- Use `--verbose` to see detailed error information
+
 ## Dependencies
 
-- `Azure.Identity` - Azure authentication
+- `Azure.Identity` - Azure authentication (MSI, Azure CLI, Service Principal)
+- `Azure.Security.KeyVault.Secrets` - Azure Key Vault secret retrieval
 - `Azure.Storage.Blobs` - Azure Blob Storage client
 - `System.CommandLine` - CLI argument parsing
 - `System.Text.Json` - JSON serialization
