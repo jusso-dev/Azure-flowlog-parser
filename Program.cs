@@ -126,6 +126,24 @@ class Program
             description: "Test HTTP endpoint connectivity without processing logs",
             getDefaultValue: () => false);
 
+        var httpKeyVaultOption = new Option<string?>(
+            name: "--http-keyvault",
+            description: "Azure Key Vault URL to load HTTP endpoint and token from",
+            getDefaultValue: () => null);
+        httpKeyVaultOption.AddAlias("-hkv");
+
+        var httpEndpointSecretOption = new Option<string>(
+            name: "--http-endpoint-secret",
+            description: "Key Vault secret name for HTTP endpoint URL",
+            getDefaultValue: () => "cortexendpoint");
+        httpEndpointSecretOption.AddAlias("-hes");
+
+        var httpTokenSecretOption = new Option<string>(
+            name: "--http-token-secret",
+            description: "Key Vault secret name for Bearer token",
+            getDefaultValue: () => "cortextoken");
+        httpTokenSecretOption.AddAlias("-hts");
+
         // Create root command
         var rootCommand = new RootCommand("Azure VNet Flow Log Parser - Fetches and parses Azure virtual network flow logs using MSI credentials");
 
@@ -148,6 +166,9 @@ class Program
         rootCommand.AddOption(httpBatchSizeOption);
         rootCommand.AddOption(httpTimeoutOption);
         rootCommand.AddOption(httpTestOption);
+        rootCommand.AddOption(httpKeyVaultOption);
+        rootCommand.AddOption(httpEndpointSecretOption);
+        rootCommand.AddOption(httpTokenSecretOption);
 
         rootCommand.SetHandler(async (
             string? storageAccount,
@@ -168,7 +189,10 @@ class Program
             bool httpCompression,
             int httpBatchSize,
             int httpTimeout,
-            bool httpTest) =>
+            bool httpTest,
+            string? httpKeyVault,
+            string httpEndpointSecret,
+            string httpTokenSecret) =>
         {
             await ProcessFlowLogsAsync(
                 storageAccount,
@@ -189,7 +213,10 @@ class Program
                 httpCompression,
                 httpBatchSize,
                 httpTimeout,
-                httpTest);
+                httpTest,
+                httpKeyVault,
+                httpEndpointSecret,
+                httpTokenSecret);
         },
         storageAccountOption,
         accountsFileOption,
@@ -209,7 +236,10 @@ class Program
         httpCompressionOption,
         httpBatchSizeOption,
         httpTimeoutOption,
-        httpTestOption);
+        httpTestOption,
+        httpKeyVaultOption,
+        httpEndpointSecretOption,
+        httpTokenSecretOption);
 
         return await rootCommand.InvokeAsync(args);
     }
@@ -233,16 +263,57 @@ class Program
         bool httpCompression,
         int httpBatchSize,
         int httpTimeout,
-        bool httpTest)
+        bool httpTest,
+        string? httpKeyVault,
+        string httpEndpointSecret,
+        string httpTokenSecret)
     {
         try
         {
+            // Load HTTP endpoint and token from Key Vault if specified
+            if (!string.IsNullOrWhiteSpace(httpKeyVault))
+            {
+                if (verbose)
+                    Console.Error.WriteLine($"Loading HTTP credentials from Key Vault: {httpKeyVault}");
+
+                try
+                {
+                    // Load endpoint if not already provided
+                    if (string.IsNullOrWhiteSpace(httpEndpoint))
+                    {
+                        var endpoints = await StorageAccountConfigLoader.LoadFromKeyVaultAsync(httpKeyVault, httpEndpointSecret);
+                        httpEndpoint = endpoints.FirstOrDefault();
+
+                        if (verbose && !string.IsNullOrWhiteSpace(httpEndpoint))
+                            Console.Error.WriteLine($"  Loaded endpoint from secret '{httpEndpointSecret}'");
+                    }
+
+                    // Load token if not already provided
+                    if (string.IsNullOrWhiteSpace(httpToken))
+                    {
+                        var tokens = await StorageAccountConfigLoader.LoadFromKeyVaultAsync(httpKeyVault, httpTokenSecret);
+                        httpToken = tokens.FirstOrDefault();
+
+                        if (verbose && !string.IsNullOrWhiteSpace(httpToken))
+                            Console.Error.WriteLine($"  Loaded token from secret '{httpTokenSecret}'");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"Error loading HTTP credentials from Key Vault: {ex.Message}");
+                    if (verbose)
+                        Console.Error.WriteLine($"  Stack trace: {ex.StackTrace}");
+                    Environment.Exit(1);
+                    return;
+                }
+            }
+
             // Handle HTTP test mode
             if (httpTest)
             {
                 if (string.IsNullOrWhiteSpace(httpEndpoint))
                 {
-                    Console.Error.WriteLine("Error: --http-endpoint is required when using --http-test");
+                    Console.Error.WriteLine("Error: --http-endpoint or --http-keyvault is required when using --http-test");
                     Environment.Exit(1);
                     return;
                 }
