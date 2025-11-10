@@ -298,7 +298,7 @@ The tool supports state tracking using Azure Blob metadata to avoid reprocessing
 
 | Option | Alias | Description | Default |
 |--------|-------|-------------|---------|
-| `--enable-state-tracking` | `-st` | Enable state tracking using blob metadata | `false` |
+| `--enable-state-tracking` | `-st` | Enable state tracking using blob metadata | `true` |
 | `--force-reprocess` | `-fr` | Force reprocessing, ignoring metadata state | `false` |
 
 ### How It Works
@@ -332,16 +332,20 @@ az role assignment create \
 #### Basic State Tracking
 
 ```bash
-# First run - processes all blobs and writes metadata
+# First run - processes all blobs and writes metadata (state tracking is enabled by default)
 dotnet run -- \
   --storage-account mystorageaccount \
-  --enable-state-tracking \
   --verbose
 
 # Second run - only processes new or modified blobs
 dotnet run -- \
   --storage-account mystorageaccount \
-  --enable-state-tracking \
+  --verbose
+
+# Disable state tracking if you want to process all blobs every time
+dotnet run -- \
+  --storage-account mystorageaccount \
+  --enable-state-tracking false \
   --verbose
 ```
 
@@ -350,10 +354,9 @@ dotnet run -- \
 Perfect for scheduled pipelines (e.g., Azure DevOps, GitHub Actions):
 
 ```bash
-# Run every 5 minutes - only processes new/changed flow logs
+# Run every 5 minutes - only processes new/changed flow logs (state tracking enabled by default)
 dotnet run -- \
   --storage-account mystorageaccount \
-  --enable-state-tracking \
   --http-endpoint https://api.example.com/flowlogs \
   --http-keyvault https://myvault.vault.azure.net/ \
   --verbose
@@ -362,10 +365,9 @@ dotnet run -- \
 #### Force Reprocessing
 
 ```bash
-# Ignore metadata and reprocess everything
+# Ignore metadata and reprocess everything (still writes new metadata)
 dotnet run -- \
   --storage-account mystorageaccount \
-  --enable-state-tracking \
   --force-reprocess \
   --verbose
 ```
@@ -373,17 +375,16 @@ dotnet run -- \
 #### Multiple Storage Accounts with State Tracking
 
 ```bash
-# State tracking works across multiple storage accounts
+# State tracking works across multiple storage accounts (enabled by default)
 dotnet run -- \
   --accounts-file storage-accounts.txt \
-  --enable-state-tracking \
   --http-endpoint https://api.example.com/flowlogs \
   --verbose
 ```
 
 ### Verbose Output
 
-When running with `--verbose` and `--enable-state-tracking`:
+When running with `--verbose` (state tracking is enabled by default):
 
 ```
 State tracking enabled: Using blob metadata to track processing
@@ -404,7 +405,9 @@ Processing: resourceId=.../PT1H.json
 
 ### Notes
 
-- State tracking requires write permissions to blob metadata
+- **State tracking is enabled by default** - perfect for CI/CD pipelines
+- To disable state tracking, use `--enable-state-tracking false`
+- State tracking requires write permissions to blob metadata (Storage Blob Data Contributor role)
 - Blob metadata is independent of blob content and doesn't affect the flow log data
 - Force reprocessing (`--force-reprocess`) still writes metadata after processing
 - State tracking has no effect when `--list-only` is used
