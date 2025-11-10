@@ -103,18 +103,20 @@ dotnet run -- --accounts-env AZURE_STORAGE_ACCOUNTS --verbose
 Store comma-separated storage account names in an Azure Key Vault secret:
 
 ```bash
-# Create the secret
+# Create the secret (secret name must be alphanumeric, value contains comma-separated accounts)
 az keyvault secret set \
   --vault-name myvault \
-  --name storage-accounts \
+  --name storageaccounts \
   --value "storageaccount1,storageaccount2,storageaccount3"
 
 # Use it in the tool
 dotnet run -- \
   --accounts-keyvault https://myvault.vault.azure.net/ \
-  --keyvault-secret storage-accounts \
+  --keyvault-secret storageaccounts \
   --verbose
 ```
+
+**Note**: Key Vault secret names should be alphanumeric (hyphens allowed but not recommended). The secret VALUE contains the comma-separated list of storage account names.
 
 ### Advanced Options
 
@@ -191,7 +193,7 @@ dotnet run -- --accounts-env AZURE_STORAGE_ACCOUNTS --limit 10 --verbose
 # Use Key Vault with filtering
 dotnet run -- \
   --accounts-keyvault https://myvault.vault.azure.net/ \
-  --keyvault-secret storage-accounts \
+  --keyvault-secret storageaccounts \
   --prefix "resourceId=/SUBSCRIPTIONS/abc123" \
   --output filtered-results.json \
   --verbose

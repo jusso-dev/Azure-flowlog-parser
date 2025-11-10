@@ -43,9 +43,11 @@ public class StorageAccountConfigLoader
 
     /// <summary>
     /// Loads storage accounts from Azure Key Vault secret (comma-separated)
+    /// The secret name should be alphanumeric (e.g., "storageaccounts")
+    /// The secret value should contain comma-separated storage account names
     /// </summary>
     /// <param name="keyVaultUrl">Key Vault URL (e.g., https://myvault.vault.azure.net/)</param>
-    /// <param name="secretName">Name of the secret containing storage account names</param>
+    /// <param name="secretName">Name of the secret (alphanumeric, e.g., "storageaccounts")</param>
     /// <returns>List of storage account names</returns>
     public static async Task<List<string>> LoadFromKeyVaultAsync(string keyVaultUrl, string secretName)
     {
