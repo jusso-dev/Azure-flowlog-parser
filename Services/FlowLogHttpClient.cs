@@ -190,7 +190,7 @@ public class FlowLogHttpClient : IDisposable
             using var memoryStream = new MemoryStream();
             using (var gzipStream = new GZipStream(memoryStream, CompressionMode.Compress, leaveOpen: true))
             {
-                await gzipStream.WriteAsync(contentBytes, 0, contentBytes.Length);
+                await gzipStream.WriteAsync(contentBytes);
             }
 
             var compressedBytes = memoryStream.ToArray();
