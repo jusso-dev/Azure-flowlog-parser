@@ -323,7 +323,9 @@ class Program
                     httpToken,
                     httpCompression,
                     httpBatchSize,
-                    httpTimeout);
+                    httpTimeout,
+                    maxRetries: 3,
+                    verbose: verbose);
 
                 var success = await testClient.TestConnectivityAsync(verbose);
                 Environment.Exit(success ? 0 : 1);
@@ -445,7 +447,9 @@ class Program
                                 httpToken,
                                 httpCompression,
                                 httpBatchSize,
-                                httpTimeout);
+                                httpTimeout,
+                                maxRetries: 3,
+                                verbose: verbose);
 
                             await httpClient.PostFlowLogsAsync(records, verbose);
                         }
@@ -487,7 +491,9 @@ class Program
                         httpToken,
                         httpCompression,
                         httpBatchSize,
-                        httpTimeout);
+                        httpTimeout,
+                        maxRetries: 3,
+                        verbose: verbose);
 
                     await httpClient.PostFlowLogsAsync(allDenormalizedRecords, verbose);
                 }
