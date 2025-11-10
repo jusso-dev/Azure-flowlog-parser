@@ -138,6 +138,19 @@ class Program
             getDefaultValue: () => "cortextoken");
         httpTokenSecretOption.AddAlias("-hts");
 
+        // State tracking options
+        var enableStateTrackingOption = new Option<bool>(
+            name: "--enable-state-tracking",
+            description: "Enable state tracking using blob metadata to avoid reprocessing (useful for CI/CD pipelines)",
+            getDefaultValue: () => false);
+        enableStateTrackingOption.AddAlias("-st");
+
+        var forceReprocessOption = new Option<bool>(
+            name: "--force-reprocess",
+            description: "Force reprocessing of all blobs, ignoring metadata state",
+            getDefaultValue: () => false);
+        forceReprocessOption.AddAlias("-fr");
+
         // Create root command
         var rootCommand = new RootCommand("Azure VNet Flow Log Parser - Fetches and parses Azure virtual network flow logs using MSI credentials");
 
@@ -162,6 +175,8 @@ class Program
         rootCommand.AddOption(httpKeyVaultOption);
         rootCommand.AddOption(httpEndpointSecretOption);
         rootCommand.AddOption(httpTokenSecretOption);
+        rootCommand.AddOption(enableStateTrackingOption);
+        rootCommand.AddOption(forceReprocessOption);
 
         rootCommand.SetHandler(async (
             string? storageAccount,
@@ -184,7 +199,9 @@ class Program
             bool httpTest,
             string? httpKeyVault,
             string httpEndpointSecret,
-            string httpTokenSecret) =>
+            string httpTokenSecret,
+            bool enableStateTracking,
+            bool forceReprocess) =>
         {
             await ProcessFlowLogsAsync(
                 storageAccount,
@@ -207,7 +224,9 @@ class Program
                 httpTest,
                 httpKeyVault,
                 httpEndpointSecret,
-                httpTokenSecret);
+                httpTokenSecret,
+                enableStateTracking,
+                forceReprocess);
         },
         storageAccountOption,
         accountsFileOption,
@@ -229,7 +248,9 @@ class Program
         httpTestOption,
         httpKeyVaultOption,
         httpEndpointSecretOption,
-        httpTokenSecretOption);
+        httpTokenSecretOption,
+        enableStateTrackingOption,
+        forceReprocessOption);
 
         return await rootCommand.InvokeAsync(args);
     }
@@ -255,7 +276,9 @@ class Program
         bool httpTest,
         string? httpKeyVault,
         string httpEndpointSecret,
-        string httpTokenSecret)
+        string httpTokenSecret,
+        bool enableStateTracking,
+        bool forceReprocess)
     {
         try
         {
@@ -398,6 +421,13 @@ class Program
                 {
                     Console.Error.WriteLine($"  - {account}");
                 }
+
+                if (enableStateTracking)
+                {
+                    Console.Error.WriteLine("State tracking enabled: Using blob metadata to track processing");
+                    if (forceReprocess)
+                        Console.Error.WriteLine("Force reprocess enabled - ignoring blob metadata state");
+                }
             }
 
             // Process all storage accounts
@@ -416,7 +446,9 @@ class Program
                         prefix,
                         limit,
                         verbose,
-                        listOnly);
+                        listOnly,
+                        enableStateTracking,
+                        forceReprocess);
 
                     if (mergeOutput)
                     {
@@ -524,7 +556,9 @@ class Program
         string? prefix,
         int? limit,
         bool verbose,
-        bool listOnly)
+        bool listOnly,
+        bool enableStateTracking,
+        bool forceReprocess)
     {
         if (verbose)
         {
@@ -546,34 +580,80 @@ class Program
             throw new InvalidOperationException($"Authentication failed for storage account '{storageAccount}'");
         }
 
-        // List blobs
+        // List blobs with metadata if state tracking is enabled
         if (verbose)
             Console.Error.WriteLine("Fetching blob list...");
 
-        var blobs = await storageClient.ListBlobsAsync(container, prefix);
+        List<string> blobsToProcess;
+        Dictionary<string, DateTimeOffset> blobMetadata = new();
 
-        if (verbose)
-            Console.Error.WriteLine($"Found {blobs.Count} blob(s)");
-
-        if (blobs.Count == 0)
+        if (enableStateTracking && !listOnly)
         {
-            Console.Error.WriteLine($"No blobs found in storage account '{storageAccount}'");
+            // Get blobs with metadata for state tracking
+            var blobsWithMetadata = await storageClient.ListBlobsWithMetadataAsync(container, prefix);
+
+            if (verbose)
+                Console.Error.WriteLine($"Found {blobsWithMetadata.Count} blob(s)");
+
+            // Filter blobs based on metadata state
+            var filteredBlobs = new List<string>();
+            int skippedCount = 0;
+
+            foreach (var blobInfo in blobsWithMetadata)
+            {
+                blobMetadata[blobInfo.Name] = blobInfo.LastModified;
+
+                if (forceReprocess)
+                {
+                    filteredBlobs.Add(blobInfo.Name);
+                }
+                else
+                {
+                    var shouldProcess = await storageClient.ShouldProcessBlobAsync(container, blobInfo.Name, blobInfo.LastModified);
+                    if (shouldProcess)
+                    {
+                        filteredBlobs.Add(blobInfo.Name);
+                    }
+                    else
+                    {
+                        skippedCount++;
+                    }
+                }
+            }
+
+            blobsToProcess = filteredBlobs;
+
+            if (verbose && skippedCount > 0)
+                Console.Error.WriteLine($"Skipped {skippedCount} blob(s) based on metadata state");
+        }
+        else
+        {
+            // Regular blob listing without metadata
+            blobsToProcess = await storageClient.ListBlobsAsync(container, prefix);
+
+            if (verbose)
+                Console.Error.WriteLine($"Found {blobsToProcess.Count} blob(s)");
+        }
+
+        if (blobsToProcess.Count == 0)
+        {
+            Console.Error.WriteLine($"No blobs to process in storage account '{storageAccount}'");
             return new List<Models.DenormalizedFlowRecord>();
         }
 
         // Apply limit if specified
         if (limit.HasValue && limit.Value > 0)
         {
-            blobs = blobs.Take(limit.Value).ToList();
+            blobsToProcess = blobsToProcess.Take(limit.Value).ToList();
             if (verbose)
-                Console.Error.WriteLine($"Limited to {blobs.Count} blob(s)");
+                Console.Error.WriteLine($"Limited to {blobsToProcess.Count} blob(s)");
         }
 
         // List only mode
         if (listOnly)
         {
             Console.WriteLine($"\nAvailable blobs in {storageAccount}:");
-            foreach (var blob in blobs)
+            foreach (var blob in blobsToProcess)
             {
                 Console.WriteLine($"  - {blob}");
             }
@@ -583,7 +663,7 @@ class Program
         // Download and parse blobs
         var denormalizedRecords = new List<Models.DenormalizedFlowRecord>();
 
-        foreach (var blobName in blobs)
+        foreach (var blobName in blobsToProcess)
         {
             if (verbose)
                 Console.Error.WriteLine($"Processing: {blobName}");
@@ -597,6 +677,15 @@ class Program
                     Console.Error.WriteLine($"  Parsed {records.Count} flow record(s)");
 
                 denormalizedRecords.AddRange(records);
+
+                // Mark blob as processed if state tracking is enabled
+                if (enableStateTracking && blobMetadata.TryGetValue(blobName, out var lastModified))
+                {
+                    await storageClient.MarkBlobAsProcessedAsync(container, blobName, lastModified, records.Count);
+
+                    if (verbose)
+                        Console.Error.WriteLine($"  Marked as processed in blob metadata");
+                }
             }
             catch (Exception ex)
             {
