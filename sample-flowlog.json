@@ -1,0 +1,75 @@
+{
+  "records": [
+    {
+      "time": "2024-01-15T10:30:00.0000000Z",
+      "systemId": "12345678-1234-1234-1234-123456789012",
+      "macAddress": "00155D123456",
+      "category": "FlowLogFlowEvent",
+      "resourceId": "/SUBSCRIPTIONS/12345678-1234-1234-1234-123456789012/RESOURCEGROUPS/MYRESOURCEGROUP/PROVIDERS/MICROSOFT.NETWORK/NETWORKSECURITYGROUPS/MYNSG",
+      "operationName": "FlowLogFlowEvent",
+      "properties": {
+        "Version": 2
+      },
+      "flowRecords": {
+        "flows": [
+          {
+            "rule": "DefaultRule_AllowInternetOutBound",
+            "flowGroups": [
+              {
+                "mac": "00155D123456",
+                "flowTuples": [
+                  "1705318200,10.0.1.4,13.107.42.14,52044,443,T,O,A,B,5,1500,3,900",
+                  "1705318205,10.0.1.4,13.107.42.14,52044,443,T,O,A,C,10,3000,8,2400",
+                  "1705318210,10.0.1.4,13.107.42.14,52044,443,T,O,A,E,2,500,1,200"
+                ]
+              },
+              {
+                "mac": "00155D123456",
+                "flowTuples": [
+                  "1705318215,10.0.1.5,40.112.72.205,49876,80,T,O,A,B,3,900,2,600"
+                ]
+              }
+            ]
+          },
+          {
+            "rule": "UserRule_DenySSH",
+            "flowGroups": [
+              {
+                "mac": "00155D123456",
+                "flowTuples": [
+                  "1705318220,192.168.1.100,10.0.1.4,54321,22,T,I,D,B,1,60,0,0"
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "time": "2024-01-15T10:31:00.0000000Z",
+      "systemId": "12345678-1234-1234-1234-123456789012",
+      "macAddress": "00155D789ABC",
+      "category": "FlowLogFlowEvent",
+      "resourceId": "/SUBSCRIPTIONS/12345678-1234-1234-1234-123456789012/RESOURCEGROUPS/MYRESOURCEGROUP/PROVIDERS/MICROSOFT.NETWORK/NETWORKSECURITYGROUPS/MYNSG",
+      "operationName": "FlowLogFlowEvent",
+      "properties": {
+        "Version": 2
+      },
+      "flowRecords": {
+        "flows": [
+          {
+            "rule": "DefaultRule_AllowVnetInBound",
+            "flowGroups": [
+              {
+                "mac": "00155D789ABC",
+                "flowTuples": [
+                  "1705318260,10.0.2.10,10.0.1.4,50123,3389,T,I,A,B,8,2400,5,1500"
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}
