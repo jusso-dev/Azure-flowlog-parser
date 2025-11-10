@@ -6,7 +6,7 @@ A .NET 9 CLI tool that fetches Azure virtual network flow logs from Azure Storag
 
 - **MSI Authentication**: Uses Azure Managed Identity for secure, credential-less authentication
 - **Multiple Storage Accounts**: Process flow logs from multiple storage accounts using file, environment variable, or Azure Key Vault
-- **HTTP Posting**: POST flow logs to HTTP endpoints with Bearer authentication, batching, and gzip compression
+- **HTTP Posting**: POST flow logs to HTTP endpoints with Bearer authentication and gzip compression (one record per request)
 - **Compatible Format**: Parses flow logs in the same format as [PaloAlto Cortex Azure Functions](https://github.com/PaloAltoNetworks/cortex-azure-functions/tree/master/vnet-flow-logs)
 - **Flexible Output**: Supports JSON and JSON Lines (JSONL) output formats, with merged or separate output per account
 - **Filtering**: Filter blobs by prefix and limit the number of processed files
@@ -167,7 +167,6 @@ azure-flowlog-parser \
 | `--http-endpoint-secret` | `-hes` | Key Vault secret name for endpoint | `cortexendpoint` |
 | `--http-token-secret` | `-hts` | Key Vault secret name for token | `cortextoken` |
 | `--http-compression` | `-hc` | Enable gzip compression | `true` |
-| `--http-batch-size` | `-hb` | Max records per HTTP batch | `1000` |
 | `--http-timeout` | - | HTTP request timeout (seconds) | `300` |
 | `--http-test` | - | Test endpoint connectivity only | `false` |
 
@@ -238,13 +237,6 @@ dotnet run -- \
   --storage-account mystorageaccount \
   --http-endpoint https://api.example.com/flowlogs \
   --http-compression false \
-  --verbose
-
-# Post with custom batch size
-dotnet run -- \
-  --storage-account mystorageaccount \
-  --http-endpoint https://api.example.com/flowlogs \
-  --http-batch-size 500 \
   --verbose
 
 # Post from multiple accounts to endpoint
@@ -443,17 +435,17 @@ The tool can POST denormalized flow logs to an HTTP endpoint, matching the patte
 
 ### Features
 
-- **Automatic Batching**: Large datasets are split into configurable batches (default: 1000 records)
+- **Individual Record Posting**: Each flow log record is POSTed individually to the endpoint
 - **Gzip Compression**: Reduces payload size by ~80% (enabled by default)
 - **Bearer Token Auth**: Supports Bearer token authentication for secure endpoints
 - **Automatic Retry with Polly**: Exponential backoff retry policy for transient failures (5xx errors, timeouts, rate limits)
 - **Dual Output**: Can post to HTTP endpoint AND save to file simultaneously
-- **Error Resilience**: Failed batches are logged but don't stop processing
+- **Error Resilience**: Failed records are logged but don't stop processing of remaining records
 - **Connectivity Testing**: Test endpoint connectivity before processing logs
 
 ### HTTP Request Format
 
-The tool POSTs JSON arrays of denormalized flow records:
+The tool POSTs individual denormalized flow records (one record per request):
 
 ```http
 POST /endpoint HTTP/1.1
@@ -462,19 +454,16 @@ Content-Type: application/json
 Content-Encoding: gzip
 Authorization: Bearer your-token-here
 
-[
-  { "time": "...", "category": "...", ... },
-  { "time": "...", "category": "...", ... }
-]
+{ "time": "...", "category": "...", "sourceAddress": "...", ... }
 ```
 
-### Batch Processing
+### Individual Record Processing
 
-When posting large datasets, records are automatically split into batches:
-- Default batch size: 1000 records
-- Configurable via `--http-batch-size`
-- Each batch is compressed and POSTed independently
-- Batches are processed sequentially
+Each flow log record is posted individually to the endpoint:
+- Records are processed sequentially (one HTTP POST per record)
+- Each record is compressed independently with gzip
+- Failed records don't prevent processing of subsequent records
+- Detailed progress tracking in verbose mode shows `[X/Total]` for each record
 
 ### Compression
 

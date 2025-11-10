@@ -19,7 +19,6 @@ public class FlowLogHttpClient : IDisposable
     private readonly string _endpoint;
     private readonly string? _bearerToken;
     private readonly bool _useCompression;
-    private readonly int _maxBatchSize;
     private readonly ResiliencePipeline<HttpResponseMessage> _retryPipeline;
     private readonly bool _verbose;
 
@@ -29,7 +28,6 @@ public class FlowLogHttpClient : IDisposable
     /// <param name="endpoint">HTTP endpoint URL to post flow logs to</param>
     /// <param name="bearerToken">Optional Bearer token for authentication</param>
     /// <param name="useCompression">Enable gzip compression (default: true)</param>
-    /// <param name="maxBatchSize">Maximum number of records per batch (default: 1000)</param>
     /// <param name="timeoutSeconds">HTTP timeout in seconds (default: 300)</param>
     /// <param name="maxRetries">Maximum number of retry attempts (default: 3)</param>
     /// <param name="verbose">Enable verbose logging (default: false)</param>
@@ -37,7 +35,6 @@ public class FlowLogHttpClient : IDisposable
         string endpoint,
         string? bearerToken = null,
         bool useCompression = true,
-        int maxBatchSize = 1000,
         int timeoutSeconds = 300,
         int maxRetries = 3,
         bool verbose = false)
@@ -50,7 +47,6 @@ public class FlowLogHttpClient : IDisposable
         _endpoint = endpoint;
         _bearerToken = bearerToken;
         _useCompression = useCompression;
-        _maxBatchSize = maxBatchSize;
         _verbose = verbose;
 
         _httpClient = new HttpClient
@@ -108,7 +104,7 @@ public class FlowLogHttpClient : IDisposable
     }
 
     /// <summary>
-    /// Posts flow log records to the configured HTTP endpoint
+    /// Posts flow log records to the configured HTTP endpoint (one record at a time)
     /// </summary>
     /// <param name="records">List of denormalized flow records to post</param>
     /// <param name="verbose">Enable verbose output</param>
@@ -124,20 +120,20 @@ public class FlowLogHttpClient : IDisposable
 
         try
         {
-            // Split records into batches if needed
-            var batches = SplitIntoBatches(records, _maxBatchSize);
-
             if (verbose)
-                Console.Error.WriteLine($"Posting {records.Count} record(s) in {batches.Count} batch(es) to: {_endpoint}");
+                Console.Error.WriteLine($"Posting {records.Count} record(s) individually to: {_endpoint}");
 
             int successCount = 0;
             int failureCount = 0;
 
-            foreach (var batch in batches)
+            for (int i = 0; i < records.Count; i++)
             {
                 try
                 {
-                    var success = await PostBatchAsync(batch, verbose);
+                    if (verbose)
+                        Console.Error.WriteLine($"  [{i + 1}/{records.Count}] Posting record...");
+
+                    var success = await PostSingleRecordAsync(records[i], verbose);
                     if (success)
                         successCount++;
                     else
@@ -146,9 +142,9 @@ public class FlowLogHttpClient : IDisposable
                 catch (Exception ex)
                 {
                     failureCount++;
-                    Console.Error.WriteLine($"Error posting batch: {ex.Message}");
+                    Console.Error.WriteLine($"  Error posting record {i + 1}: {ex.Message}");
                     if (verbose)
-                        Console.Error.WriteLine($"  Stack trace: {ex.StackTrace}");
+                        Console.Error.WriteLine($"    Stack trace: {ex.StackTrace}");
                 }
             }
 
@@ -169,17 +165,17 @@ public class FlowLogHttpClient : IDisposable
     }
 
     /// <summary>
-    /// Posts a single batch of records to the endpoint
+    /// Posts a single record to the endpoint
     /// </summary>
-    private async Task<bool> PostBatchAsync(List<DenormalizedFlowRecord> batch, bool verbose)
+    private async Task<bool> PostSingleRecordAsync(DenormalizedFlowRecord record, bool verbose)
     {
-        // Serialize records to JSON
+        // Serialize single record to JSON (as an object, not an array)
         var jsonOptions = new JsonSerializerOptions
         {
             DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
         };
 
-        var jsonContent = JsonSerializer.Serialize(batch, jsonOptions);
+        var jsonContent = JsonSerializer.Serialize(record, jsonOptions);
         var contentBytes = Encoding.UTF8.GetBytes(jsonContent);
 
         HttpContent httpContent;
@@ -200,8 +196,7 @@ public class FlowLogHttpClient : IDisposable
 
             if (verbose)
             {
-                Console.Error.WriteLine($"  Batch size: {batch.Count} records, " +
-                    $"Uncompressed: {contentBytes.Length} bytes, " +
+                Console.Error.WriteLine($"    Uncompressed: {contentBytes.Length} bytes, " +
                     $"Compressed: {compressedBytes.Length} bytes " +
                     $"({(double)compressedBytes.Length / contentBytes.Length * 100:F1}%)");
             }
@@ -212,7 +207,7 @@ public class FlowLogHttpClient : IDisposable
 
             if (verbose)
             {
-                Console.Error.WriteLine($"  Batch size: {batch.Count} records, Size: {contentBytes.Length} bytes");
+                Console.Error.WriteLine($"    Size: {contentBytes.Length} bytes");
             }
         }
 
@@ -225,38 +220,22 @@ public class FlowLogHttpClient : IDisposable
         {
             if (verbose)
             {
-                Console.Error.WriteLine($"  ✓ Successfully posted batch (Status: {(int)response.StatusCode} {response.StatusCode})");
+                Console.Error.WriteLine($"    ✓ Successfully posted (Status: {(int)response.StatusCode} {response.StatusCode})");
             }
             return true;
         }
         else
         {
             var errorContent = await response.Content.ReadAsStringAsync();
-            Console.Error.WriteLine($"  ✗ Failed to post batch (Status: {(int)response.StatusCode} {response.StatusCode})");
+            Console.Error.WriteLine($"    ✗ Failed to post (Status: {(int)response.StatusCode} {response.StatusCode})");
 
             if (verbose && !string.IsNullOrWhiteSpace(errorContent))
             {
-                Console.Error.WriteLine($"  Response: {errorContent}");
+                Console.Error.WriteLine($"    Response: {errorContent}");
             }
 
             return false;
         }
-    }
-
-    /// <summary>
-    /// Splits records into batches
-    /// </summary>
-    private List<List<DenormalizedFlowRecord>> SplitIntoBatches(List<DenormalizedFlowRecord> records, int batchSize)
-    {
-        var batches = new List<List<DenormalizedFlowRecord>>();
-
-        for (int i = 0; i < records.Count; i += batchSize)
-        {
-            var batch = records.Skip(i).Take(batchSize).ToList();
-            batches.Add(batch);
-        }
-
-        return batches;
     }
 
     /// <summary>

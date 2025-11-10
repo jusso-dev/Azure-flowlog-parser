@@ -110,12 +110,6 @@ class Program
             getDefaultValue: () => true);
         httpCompressionOption.AddAlias("-hc");
 
-        var httpBatchSizeOption = new Option<int>(
-            name: "--http-batch-size",
-            description: "Maximum number of records per HTTP batch (default: 1000)",
-            getDefaultValue: () => 1000);
-        httpBatchSizeOption.AddAlias("-hb");
-
         var httpTimeoutOption = new Option<int>(
             name: "--http-timeout",
             description: "HTTP request timeout in seconds (default: 300)",
@@ -163,7 +157,6 @@ class Program
         rootCommand.AddOption(httpEndpointOption);
         rootCommand.AddOption(httpTokenOption);
         rootCommand.AddOption(httpCompressionOption);
-        rootCommand.AddOption(httpBatchSizeOption);
         rootCommand.AddOption(httpTimeoutOption);
         rootCommand.AddOption(httpTestOption);
         rootCommand.AddOption(httpKeyVaultOption);
@@ -187,7 +180,6 @@ class Program
             string? httpEndpoint,
             string? httpToken,
             bool httpCompression,
-            int httpBatchSize,
             int httpTimeout,
             bool httpTest,
             string? httpKeyVault,
@@ -211,7 +203,6 @@ class Program
                 httpEndpoint,
                 httpToken,
                 httpCompression,
-                httpBatchSize,
                 httpTimeout,
                 httpTest,
                 httpKeyVault,
@@ -234,7 +225,6 @@ class Program
         httpEndpointOption,
         httpTokenOption,
         httpCompressionOption,
-        httpBatchSizeOption,
         httpTimeoutOption,
         httpTestOption,
         httpKeyVaultOption,
@@ -261,7 +251,6 @@ class Program
         string? httpEndpoint,
         string? httpToken,
         bool httpCompression,
-        int httpBatchSize,
         int httpTimeout,
         bool httpTest,
         string? httpKeyVault,
@@ -322,7 +311,6 @@ class Program
                     httpEndpoint,
                     httpToken,
                     httpCompression,
-                    httpBatchSize,
                     httpTimeout,
                     maxRetries: 3,
                     verbose: verbose);
@@ -446,7 +434,6 @@ class Program
                                 httpEndpoint,
                                 httpToken,
                                 httpCompression,
-                                httpBatchSize,
                                 httpTimeout,
                                 maxRetries: 3,
                                 verbose: verbose);
@@ -490,7 +477,6 @@ class Program
                         httpEndpoint,
                         httpToken,
                         httpCompression,
-                        httpBatchSize,
                         httpTimeout,
                         maxRetries: 3,
                         verbose: verbose);
