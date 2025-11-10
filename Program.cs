@@ -542,7 +542,17 @@ class Program
         }
 
         // Initialize Azure Storage client with MSI
-        var storageClient = new AzureStorageClient(storageAccount);
+        var storageClient = new AzureStorageClient(storageAccount, verbose);
+
+        // Test authentication before proceeding
+        if (verbose)
+            Console.Error.WriteLine("Testing authentication...");
+
+        var authSuccess = await storageClient.TestAuthenticationAsync(verbose);
+        if (!authSuccess)
+        {
+            throw new InvalidOperationException($"Authentication failed for storage account '{storageAccount}'");
+        }
 
         // List blobs
         if (verbose)
