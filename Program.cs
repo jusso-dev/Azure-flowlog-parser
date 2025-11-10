@@ -142,7 +142,7 @@ class Program
         var enableStateTrackingOption = new Option<bool>(
             name: "--enable-state-tracking",
             description: "Enable state tracking using blob metadata to avoid reprocessing (useful for CI/CD pipelines)",
-            getDefaultValue: () => false);
+            getDefaultValue: () => true);
         enableStateTrackingOption.AddAlias("-st");
 
         var forceReprocessOption = new Option<bool>(
