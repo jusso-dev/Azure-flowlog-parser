@@ -6,6 +6,7 @@ A .NET 9 CLI tool that fetches Azure virtual network flow logs from Azure Storag
 
 - **MSI Authentication**: Uses Azure Managed Identity for secure, credential-less authentication
 - **Multiple Storage Accounts**: Process flow logs from multiple storage accounts using file, environment variable, or Azure Key Vault
+- **HTTP Posting**: POST flow logs to HTTP endpoints with Bearer authentication, batching, and gzip compression
 - **Compatible Format**: Parses flow logs in the same format as [PaloAlto Cortex Azure Functions](https://github.com/PaloAltoNetworks/cortex-azure-functions/tree/master/vnet-flow-logs)
 - **Flexible Output**: Supports JSON and JSON Lines (JSONL) output formats, with merged or separate output per account
 - **Filtering**: Filter blobs by prefix and limit the number of processed files
@@ -156,6 +157,17 @@ azure-flowlog-parser \
 | `--verbose` | `-v` | Enable verbose output | `false` |
 | `--list-only` | - | Only list available blobs | `false` |
 
+#### HTTP Posting Options
+
+| Option | Alias | Description | Default |
+|--------|-------|-------------|---------|
+| `--http-endpoint` | `-he` | HTTP endpoint URL to POST flow logs | - |
+| `--http-token` | `-ht` | Bearer token for authentication | - |
+| `--http-compression` | `-hc` | Enable gzip compression | `true` |
+| `--http-batch-size` | `-hb` | Max records per HTTP batch | `1000` |
+| `--http-timeout` | - | HTTP request timeout (seconds) | `300` |
+| `--http-test` | - | Test endpoint connectivity only | `false` |
+
 ### Examples
 
 #### Single Storage Account
@@ -200,6 +212,57 @@ dotnet run -- \
 
 # List blobs from multiple accounts
 dotnet run -- --accounts-file storage-accounts.txt --list-only
+```
+
+#### HTTP Posting
+
+```bash
+# Post flow logs to an HTTP endpoint
+dotnet run -- \
+  --storage-account mystorageaccount \
+  --http-endpoint https://api.example.com/flowlogs \
+  --verbose
+
+# Post with Bearer token authentication
+dotnet run -- \
+  --storage-account mystorageaccount \
+  --http-endpoint https://api.example.com/flowlogs \
+  --http-token "your-bearer-token" \
+  --verbose
+
+# Post without compression (useful for debugging)
+dotnet run -- \
+  --storage-account mystorageaccount \
+  --http-endpoint https://api.example.com/flowlogs \
+  --http-compression false \
+  --verbose
+
+# Post with custom batch size
+dotnet run -- \
+  --storage-account mystorageaccount \
+  --http-endpoint https://api.example.com/flowlogs \
+  --http-batch-size 500 \
+  --verbose
+
+# Post from multiple accounts to endpoint
+dotnet run -- \
+  --accounts-file storage-accounts.txt \
+  --http-endpoint https://api.example.com/flowlogs \
+  --http-token "your-bearer-token" \
+  --verbose
+
+# Post to endpoint AND save to file
+dotnet run -- \
+  --storage-account mystorageaccount \
+  --http-endpoint https://api.example.com/flowlogs \
+  --output backup.json \
+  --verbose
+
+# Test endpoint connectivity
+dotnet run -- \
+  --http-endpoint https://api.example.com/flowlogs \
+  --http-token "your-bearer-token" \
+  --http-test
 ```
 
 ## Output Format
@@ -349,6 +412,58 @@ The tool automatically validates storage account names according to Azure rules:
 - If one storage account fails, processing continues with remaining accounts
 - Errors are logged to stderr while results go to stdout or file
 - Use `--verbose` to see detailed error information
+
+## HTTP Posting Features
+
+The tool can POST denormalized flow logs to an HTTP endpoint, matching the pattern from the [PaloAlto Cortex Azure Functions reference](https://github.com/PaloAltoNetworks/cortex-azure-functions/tree/master/vnet-flow-logs).
+
+### Features
+
+- **Automatic Batching**: Large datasets are split into configurable batches (default: 1000 records)
+- **Gzip Compression**: Reduces payload size by ~80% (enabled by default)
+- **Bearer Token Auth**: Supports Bearer token authentication for secure endpoints
+- **Dual Output**: Can post to HTTP endpoint AND save to file simultaneously
+- **Error Resilience**: Failed batches are logged but don't stop processing
+- **Connectivity Testing**: Test endpoint connectivity before processing logs
+
+### HTTP Request Format
+
+The tool POSTs JSON arrays of denormalized flow records:
+
+```http
+POST /endpoint HTTP/1.1
+Host: api.example.com
+Content-Type: application/json
+Content-Encoding: gzip
+Authorization: Bearer your-token-here
+
+[
+  { "time": "...", "category": "...", ... },
+  { "time": "...", "category": "...", ... }
+]
+```
+
+### Batch Processing
+
+When posting large datasets, records are automatically split into batches:
+- Default batch size: 1000 records
+- Configurable via `--http-batch-size`
+- Each batch is compressed and POSTed independently
+- Batches are processed sequentially
+
+### Compression
+
+Gzip compression is enabled by default and significantly reduces payload size:
+- Typical compression ratio: 75-85%
+- Example: 5MB uncompressed → ~1MB compressed
+- Disable with `--http-compression false` for debugging
+
+### Use Cases
+
+1. **Forward to SIEM**: Post flow logs to your SIEM platform's ingestion endpoint
+2. **Custom Analytics**: Send to custom analytics platform for processing
+3. **Data Lake**: Forward to data lake ingestion API
+4. **Monitoring**: Send to monitoring/alerting systems
 
 ## Dependencies
 

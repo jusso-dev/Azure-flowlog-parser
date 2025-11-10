@@ -91,6 +91,41 @@ class Program
             getDefaultValue: () => true);
         mergeOutputOption.AddAlias("-m");
 
+        // HTTP posting options
+        var httpEndpointOption = new Option<string?>(
+            name: "--http-endpoint",
+            description: "HTTP endpoint URL to POST flow logs to (optional)",
+            getDefaultValue: () => null);
+        httpEndpointOption.AddAlias("-he");
+
+        var httpTokenOption = new Option<string?>(
+            name: "--http-token",
+            description: "Bearer token for HTTP endpoint authentication (optional)",
+            getDefaultValue: () => null);
+        httpTokenOption.AddAlias("-ht");
+
+        var httpCompressionOption = new Option<bool>(
+            name: "--http-compression",
+            description: "Enable gzip compression for HTTP requests (default: true)",
+            getDefaultValue: () => true);
+        httpCompressionOption.AddAlias("-hc");
+
+        var httpBatchSizeOption = new Option<int>(
+            name: "--http-batch-size",
+            description: "Maximum number of records per HTTP batch (default: 1000)",
+            getDefaultValue: () => 1000);
+        httpBatchSizeOption.AddAlias("-hb");
+
+        var httpTimeoutOption = new Option<int>(
+            name: "--http-timeout",
+            description: "HTTP request timeout in seconds (default: 300)",
+            getDefaultValue: () => 300);
+
+        var httpTestOption = new Option<bool>(
+            name: "--http-test",
+            description: "Test HTTP endpoint connectivity without processing logs",
+            getDefaultValue: () => false);
+
         // Create root command
         var rootCommand = new RootCommand("Azure VNet Flow Log Parser - Fetches and parses Azure virtual network flow logs using MSI credentials");
 
@@ -107,6 +142,12 @@ class Program
         rootCommand.AddOption(verboseOption);
         rootCommand.AddOption(listOnlyOption);
         rootCommand.AddOption(mergeOutputOption);
+        rootCommand.AddOption(httpEndpointOption);
+        rootCommand.AddOption(httpTokenOption);
+        rootCommand.AddOption(httpCompressionOption);
+        rootCommand.AddOption(httpBatchSizeOption);
+        rootCommand.AddOption(httpTimeoutOption);
+        rootCommand.AddOption(httpTestOption);
 
         rootCommand.SetHandler(async (
             string? storageAccount,
@@ -121,7 +162,13 @@ class Program
             int? limit,
             bool verbose,
             bool listOnly,
-            bool mergeOutput) =>
+            bool mergeOutput,
+            string? httpEndpoint,
+            string? httpToken,
+            bool httpCompression,
+            int httpBatchSize,
+            int httpTimeout,
+            bool httpTest) =>
         {
             await ProcessFlowLogsAsync(
                 storageAccount,
@@ -136,7 +183,13 @@ class Program
                 limit,
                 verbose,
                 listOnly,
-                mergeOutput);
+                mergeOutput,
+                httpEndpoint,
+                httpToken,
+                httpCompression,
+                httpBatchSize,
+                httpTimeout,
+                httpTest);
         },
         storageAccountOption,
         accountsFileOption,
@@ -150,7 +203,13 @@ class Program
         limitOption,
         verboseOption,
         listOnlyOption,
-        mergeOutputOption);
+        mergeOutputOption,
+        httpEndpointOption,
+        httpTokenOption,
+        httpCompressionOption,
+        httpBatchSizeOption,
+        httpTimeoutOption,
+        httpTestOption);
 
         return await rootCommand.InvokeAsync(args);
     }
@@ -168,10 +227,38 @@ class Program
         int? limit,
         bool verbose,
         bool listOnly,
-        bool mergeOutput)
+        bool mergeOutput,
+        string? httpEndpoint,
+        string? httpToken,
+        bool httpCompression,
+        int httpBatchSize,
+        int httpTimeout,
+        bool httpTest)
     {
         try
         {
+            // Handle HTTP test mode
+            if (httpTest)
+            {
+                if (string.IsNullOrWhiteSpace(httpEndpoint))
+                {
+                    Console.Error.WriteLine("Error: --http-endpoint is required when using --http-test");
+                    Environment.Exit(1);
+                    return;
+                }
+
+                using var testClient = new FlowLogHttpClient(
+                    httpEndpoint,
+                    httpToken,
+                    httpCompression,
+                    httpBatchSize,
+                    httpTimeout);
+
+                var success = await testClient.TestConnectivityAsync(verbose);
+                Environment.Exit(success ? 0 : 1);
+                return;
+            }
+
             // Load storage accounts from the specified source
             List<string> storageAccounts;
 
@@ -276,13 +363,32 @@ class Program
                     }
                     else if (!listOnly)
                     {
-                        // Output results for this account separately
-                        await OutputResultsAsync(
-                            records,
-                            format,
-                            outputPath != null ? $"{Path.GetFileNameWithoutExtension(outputPath)}_{account}{Path.GetExtension(outputPath)}" : null,
-                            verbose,
-                            account);
+                        // Post to HTTP endpoint if configured (per account)
+                        if (!string.IsNullOrWhiteSpace(httpEndpoint))
+                        {
+                            if (verbose)
+                                Console.Error.WriteLine($"Posting {records.Count} records from {account} to HTTP endpoint...");
+
+                            using var httpClient = new FlowLogHttpClient(
+                                httpEndpoint,
+                                httpToken,
+                                httpCompression,
+                                httpBatchSize,
+                                httpTimeout);
+
+                            await httpClient.PostFlowLogsAsync(records, verbose);
+                        }
+
+                        // Output results for this account separately (if file output specified or no HTTP endpoint)
+                        if (!string.IsNullOrWhiteSpace(outputPath) || string.IsNullOrWhiteSpace(httpEndpoint))
+                        {
+                            await OutputResultsAsync(
+                                records,
+                                format,
+                                outputPath != null ? $"{Path.GetFileNameWithoutExtension(outputPath)}_{account}{Path.GetExtension(outputPath)}" : null,
+                                verbose,
+                                account);
+                        }
                     }
                 }
                 catch (Exception ex)
@@ -299,7 +405,27 @@ class Program
                 if (verbose)
                     Console.Error.WriteLine($"\nTotal records parsed from all accounts: {allDenormalizedRecords.Count}");
 
-                await OutputResultsAsync(allDenormalizedRecords, format, outputPath, verbose);
+                // Post to HTTP endpoint if configured
+                if (!string.IsNullOrWhiteSpace(httpEndpoint))
+                {
+                    if (verbose)
+                        Console.Error.WriteLine($"\n=== Posting to HTTP endpoint ===");
+
+                    using var httpClient = new FlowLogHttpClient(
+                        httpEndpoint,
+                        httpToken,
+                        httpCompression,
+                        httpBatchSize,
+                        httpTimeout);
+
+                    await httpClient.PostFlowLogsAsync(allDenormalizedRecords, verbose);
+                }
+
+                // Output to file or stdout if configured
+                if (!string.IsNullOrWhiteSpace(outputPath) || string.IsNullOrWhiteSpace(httpEndpoint))
+                {
+                    await OutputResultsAsync(allDenormalizedRecords, format, outputPath, verbose);
+                }
             }
         }
         catch (Azure.RequestFailedException ex)
