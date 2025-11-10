@@ -1,8 +1,11 @@
 using System.IO.Compression;
+using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using AzureFlowLogParser.Models;
+using Polly;
+using Polly.Retry;
 
 namespace AzureFlowLogParser.Services;
 
@@ -17,6 +20,8 @@ public class FlowLogHttpClient : IDisposable
     private readonly string? _bearerToken;
     private readonly bool _useCompression;
     private readonly int _maxBatchSize;
+    private readonly ResiliencePipeline<HttpResponseMessage> _retryPipeline;
+    private readonly bool _verbose;
 
     /// <summary>
     /// Initializes the HTTP client for posting flow logs
@@ -26,12 +31,16 @@ public class FlowLogHttpClient : IDisposable
     /// <param name="useCompression">Enable gzip compression (default: true)</param>
     /// <param name="maxBatchSize">Maximum number of records per batch (default: 1000)</param>
     /// <param name="timeoutSeconds">HTTP timeout in seconds (default: 300)</param>
+    /// <param name="maxRetries">Maximum number of retry attempts (default: 3)</param>
+    /// <param name="verbose">Enable verbose logging (default: false)</param>
     public FlowLogHttpClient(
         string endpoint,
         string? bearerToken = null,
         bool useCompression = true,
         int maxBatchSize = 1000,
-        int timeoutSeconds = 300)
+        int timeoutSeconds = 300,
+        int maxRetries = 3,
+        bool verbose = false)
     {
         if (string.IsNullOrWhiteSpace(endpoint))
         {
@@ -42,6 +51,7 @@ public class FlowLogHttpClient : IDisposable
         _bearerToken = bearerToken;
         _useCompression = useCompression;
         _maxBatchSize = maxBatchSize;
+        _verbose = verbose;
 
         _httpClient = new HttpClient
         {
@@ -54,6 +64,46 @@ public class FlowLogHttpClient : IDisposable
         if (!string.IsNullOrWhiteSpace(_bearerToken))
         {
             _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", _bearerToken);
+        }
+
+        // Configure Polly retry policy with exponential backoff
+        _retryPipeline = new ResiliencePipelineBuilder<HttpResponseMessage>()
+            .AddRetry(new RetryStrategyOptions<HttpResponseMessage>
+            {
+                MaxRetryAttempts = maxRetries,
+                Delay = TimeSpan.FromSeconds(1),
+                BackoffType = DelayBackoffType.Exponential,
+                UseJitter = true,
+                ShouldHandle = new PredicateBuilder<HttpResponseMessage>()
+                    .Handle<HttpRequestException>()
+                    .Handle<TaskCanceledException>()
+                    .HandleResult(response =>
+                    {
+                        // Retry on transient HTTP errors
+                        var statusCode = (int)response.StatusCode;
+                        return statusCode >= 500 || // Server errors
+                               response.StatusCode == HttpStatusCode.RequestTimeout || // 408
+                               response.StatusCode == HttpStatusCode.TooManyRequests; // 429
+                    }),
+                OnRetry = args =>
+                {
+                    var statusCode = args.Outcome.Result?.StatusCode.ToString() ?? "N/A";
+                    var exception = args.Outcome.Exception?.Message ?? "N/A";
+
+                    if (verbose)
+                    {
+                        Console.Error.WriteLine($"  Retry attempt {args.AttemptNumber} after delay of {args.RetryDelay.TotalSeconds:F1}s");
+                        Console.Error.WriteLine($"    Reason: Status={statusCode}, Exception={exception}");
+                    }
+
+                    return ValueTask.CompletedTask;
+                }
+            })
+            .Build();
+
+        if (verbose && maxRetries > 0)
+        {
+            Console.Error.WriteLine($"HTTP client configured with {maxRetries} retry attempts using exponential backoff");
         }
     }
 
@@ -166,8 +216,10 @@ public class FlowLogHttpClient : IDisposable
             }
         }
 
-        // Post to endpoint
-        var response = await _httpClient.PostAsync(_endpoint, httpContent);
+        // Post to endpoint with retry policy
+        var response = await _retryPipeline.ExecuteAsync(
+            async cancellationToken => await _httpClient.PostAsync(_endpoint, httpContent, cancellationToken),
+            CancellationToken.None);
 
         if (response.IsSuccessStatusCode)
         {
@@ -217,9 +269,11 @@ public class FlowLogHttpClient : IDisposable
             if (verbose)
                 Console.Error.WriteLine($"Testing connectivity to: {_endpoint}");
 
-            // Try a HEAD or OPTIONS request first
+            // Try a HEAD or OPTIONS request first (with retry policy)
             var request = new HttpRequestMessage(HttpMethod.Options, _endpoint);
-            var response = await _httpClient.SendAsync(request);
+            var response = await _retryPipeline.ExecuteAsync(
+                async cancellationToken => await _httpClient.SendAsync(request, cancellationToken),
+                CancellationToken.None);
 
             if (verbose)
             {

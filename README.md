@@ -446,6 +446,7 @@ The tool can POST denormalized flow logs to an HTTP endpoint, matching the patte
 - **Automatic Batching**: Large datasets are split into configurable batches (default: 1000 records)
 - **Gzip Compression**: Reduces payload size by ~80% (enabled by default)
 - **Bearer Token Auth**: Supports Bearer token authentication for secure endpoints
+- **Automatic Retry with Polly**: Exponential backoff retry policy for transient failures (5xx errors, timeouts, rate limits)
 - **Dual Output**: Can post to HTTP endpoint AND save to file simultaneously
 - **Error Resilience**: Failed batches are logged but don't stop processing
 - **Connectivity Testing**: Test endpoint connectivity before processing logs
@@ -481,6 +482,39 @@ Gzip compression is enabled by default and significantly reduces payload size:
 - Typical compression ratio: 75-85%
 - Example: 5MB uncompressed → ~1MB compressed
 - Disable with `--http-compression false` for debugging
+
+### Retry Policy
+
+The HTTP client uses [Polly](https://github.com/App-vNext/Polly) for automatic retry with exponential backoff:
+
+**Configuration:**
+- Default retry attempts: 3
+- Initial delay: 1 second
+- Backoff strategy: Exponential with jitter
+- Retries on:
+  - HTTP 5xx (Server errors)
+  - HTTP 408 (Request Timeout)
+  - HTTP 429 (Too Many Requests / Rate Limiting)
+  - Network errors (HttpRequestException)
+  - Timeouts (TaskCanceledException)
+
+**Exponential Backoff:**
+- Attempt 1: ~1 second delay
+- Attempt 2: ~2 seconds delay
+- Attempt 3: ~4 seconds delay
+- Jitter is added to prevent thundering herd problems
+
+**Verbose Output:**
+When running with `--verbose`, you'll see detailed retry information:
+```
+HTTP client configured with 3 retry attempts using exponential backoff
+  Retry attempt 1 after delay of 1.2s
+    Reason: Status=503 ServiceUnavailable, Exception=N/A
+  Retry attempt 2 after delay of 2.4s
+    Reason: Status=503 ServiceUnavailable, Exception=N/A
+```
+
+This ensures reliable delivery even when endpoints experience temporary issues or rate limiting.
 
 ### Key Vault Configuration
 
@@ -537,6 +571,8 @@ dotnet run -- \
 - `Azure.Identity` - Azure authentication (MSI, Azure CLI, Service Principal)
 - `Azure.Security.KeyVault.Secrets` - Azure Key Vault secret retrieval
 - `Azure.Storage.Blobs` - Azure Blob Storage client
+- `Polly` - Resilience and transient-fault-handling with retry policies
+- `Polly.Extensions.Http` - Polly extensions for HttpClient
 - `System.CommandLine` - CLI argument parsing
 - `System.Text.Json` - JSON serialization
 
