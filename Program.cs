@@ -91,6 +91,66 @@ class Program
             getDefaultValue: () => true);
         mergeOutputOption.AddAlias("-m");
 
+        // HTTP posting options
+        var httpEndpointOption = new Option<string?>(
+            name: "--http-endpoint",
+            description: "HTTP endpoint URL to POST flow logs to (optional)",
+            getDefaultValue: () => null);
+        httpEndpointOption.AddAlias("-he");
+
+        var httpTokenOption = new Option<string?>(
+            name: "--http-token",
+            description: "Bearer token for HTTP endpoint authentication (optional)",
+            getDefaultValue: () => null);
+        httpTokenOption.AddAlias("-ht");
+
+        var httpCompressionOption = new Option<bool>(
+            name: "--http-compression",
+            description: "Enable gzip compression for HTTP requests (default: true)",
+            getDefaultValue: () => true);
+        httpCompressionOption.AddAlias("-hc");
+
+        var httpTimeoutOption = new Option<int>(
+            name: "--http-timeout",
+            description: "HTTP request timeout in seconds (default: 300)",
+            getDefaultValue: () => 300);
+
+        var httpTestOption = new Option<bool>(
+            name: "--http-test",
+            description: "Test HTTP endpoint connectivity without processing logs",
+            getDefaultValue: () => false);
+
+        var httpKeyVaultOption = new Option<string?>(
+            name: "--http-keyvault",
+            description: "Azure Key Vault URL to load HTTP endpoint and token from",
+            getDefaultValue: () => null);
+        httpKeyVaultOption.AddAlias("-hkv");
+
+        var httpEndpointSecretOption = new Option<string>(
+            name: "--http-endpoint-secret",
+            description: "Key Vault secret name for HTTP endpoint URL",
+            getDefaultValue: () => "cortexendpoint");
+        httpEndpointSecretOption.AddAlias("-hes");
+
+        var httpTokenSecretOption = new Option<string>(
+            name: "--http-token-secret",
+            description: "Key Vault secret name for Bearer token",
+            getDefaultValue: () => "cortextoken");
+        httpTokenSecretOption.AddAlias("-hts");
+
+        // State tracking options
+        var enableStateTrackingOption = new Option<bool>(
+            name: "--enable-state-tracking",
+            description: "Enable state tracking using blob metadata to avoid reprocessing (useful for CI/CD pipelines)",
+            getDefaultValue: () => false);
+        enableStateTrackingOption.AddAlias("-st");
+
+        var forceReprocessOption = new Option<bool>(
+            name: "--force-reprocess",
+            description: "Force reprocessing of all blobs, ignoring metadata state",
+            getDefaultValue: () => false);
+        forceReprocessOption.AddAlias("-fr");
+
         // Create root command
         var rootCommand = new RootCommand("Azure VNet Flow Log Parser - Fetches and parses Azure virtual network flow logs using MSI credentials");
 
@@ -107,6 +167,16 @@ class Program
         rootCommand.AddOption(verboseOption);
         rootCommand.AddOption(listOnlyOption);
         rootCommand.AddOption(mergeOutputOption);
+        rootCommand.AddOption(httpEndpointOption);
+        rootCommand.AddOption(httpTokenOption);
+        rootCommand.AddOption(httpCompressionOption);
+        rootCommand.AddOption(httpTimeoutOption);
+        rootCommand.AddOption(httpTestOption);
+        rootCommand.AddOption(httpKeyVaultOption);
+        rootCommand.AddOption(httpEndpointSecretOption);
+        rootCommand.AddOption(httpTokenSecretOption);
+        rootCommand.AddOption(enableStateTrackingOption);
+        rootCommand.AddOption(forceReprocessOption);
 
         rootCommand.SetHandler(async (
             string? storageAccount,
@@ -121,7 +191,17 @@ class Program
             int? limit,
             bool verbose,
             bool listOnly,
-            bool mergeOutput) =>
+            bool mergeOutput,
+            string? httpEndpoint,
+            string? httpToken,
+            bool httpCompression,
+            int httpTimeout,
+            bool httpTest,
+            string? httpKeyVault,
+            string httpEndpointSecret,
+            string httpTokenSecret,
+            bool enableStateTracking,
+            bool forceReprocess) =>
         {
             await ProcessFlowLogsAsync(
                 storageAccount,
@@ -136,7 +216,17 @@ class Program
                 limit,
                 verbose,
                 listOnly,
-                mergeOutput);
+                mergeOutput,
+                httpEndpoint,
+                httpToken,
+                httpCompression,
+                httpTimeout,
+                httpTest,
+                httpKeyVault,
+                httpEndpointSecret,
+                httpTokenSecret,
+                enableStateTracking,
+                forceReprocess);
         },
         storageAccountOption,
         accountsFileOption,
@@ -150,7 +240,17 @@ class Program
         limitOption,
         verboseOption,
         listOnlyOption,
-        mergeOutputOption);
+        mergeOutputOption,
+        httpEndpointOption,
+        httpTokenOption,
+        httpCompressionOption,
+        httpTimeoutOption,
+        httpTestOption,
+        httpKeyVaultOption,
+        httpEndpointSecretOption,
+        httpTokenSecretOption,
+        enableStateTrackingOption,
+        forceReprocessOption);
 
         return await rootCommand.InvokeAsync(args);
     }
@@ -168,10 +268,81 @@ class Program
         int? limit,
         bool verbose,
         bool listOnly,
-        bool mergeOutput)
+        bool mergeOutput,
+        string? httpEndpoint,
+        string? httpToken,
+        bool httpCompression,
+        int httpTimeout,
+        bool httpTest,
+        string? httpKeyVault,
+        string httpEndpointSecret,
+        string httpTokenSecret,
+        bool enableStateTracking,
+        bool forceReprocess)
     {
         try
         {
+            // Load HTTP endpoint and token from Key Vault if specified
+            if (!string.IsNullOrWhiteSpace(httpKeyVault))
+            {
+                if (verbose)
+                    Console.Error.WriteLine($"Loading HTTP credentials from Key Vault: {httpKeyVault}");
+
+                try
+                {
+                    // Load endpoint if not already provided
+                    if (string.IsNullOrWhiteSpace(httpEndpoint))
+                    {
+                        var endpoints = await StorageAccountConfigLoader.LoadFromKeyVaultAsync(httpKeyVault, httpEndpointSecret);
+                        httpEndpoint = endpoints.FirstOrDefault();
+
+                        if (verbose && !string.IsNullOrWhiteSpace(httpEndpoint))
+                            Console.Error.WriteLine($"  Loaded endpoint from secret '{httpEndpointSecret}'");
+                    }
+
+                    // Load token if not already provided
+                    if (string.IsNullOrWhiteSpace(httpToken))
+                    {
+                        var tokens = await StorageAccountConfigLoader.LoadFromKeyVaultAsync(httpKeyVault, httpTokenSecret);
+                        httpToken = tokens.FirstOrDefault();
+
+                        if (verbose && !string.IsNullOrWhiteSpace(httpToken))
+                            Console.Error.WriteLine($"  Loaded token from secret '{httpTokenSecret}'");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"Error loading HTTP credentials from Key Vault: {ex.Message}");
+                    if (verbose)
+                        Console.Error.WriteLine($"  Stack trace: {ex.StackTrace}");
+                    Environment.Exit(1);
+                    return;
+                }
+            }
+
+            // Handle HTTP test mode
+            if (httpTest)
+            {
+                if (string.IsNullOrWhiteSpace(httpEndpoint))
+                {
+                    Console.Error.WriteLine("Error: --http-endpoint or --http-keyvault is required when using --http-test");
+                    Environment.Exit(1);
+                    return;
+                }
+
+                using var testClient = new FlowLogHttpClient(
+                    httpEndpoint,
+                    httpToken,
+                    httpCompression,
+                    httpTimeout,
+                    maxRetries: 3,
+                    verbose: verbose);
+
+                var success = await testClient.TestConnectivityAsync(verbose);
+                Environment.Exit(success ? 0 : 1);
+                return;
+            }
+
             // Load storage accounts from the specified source
             List<string> storageAccounts;
 
@@ -250,6 +421,13 @@ class Program
                 {
                     Console.Error.WriteLine($"  - {account}");
                 }
+
+                if (enableStateTracking)
+                {
+                    Console.Error.WriteLine("State tracking enabled: Using blob metadata to track processing");
+                    if (forceReprocess)
+                        Console.Error.WriteLine("Force reprocess enabled - ignoring blob metadata state");
+                }
             }
 
             // Process all storage accounts
@@ -268,7 +446,9 @@ class Program
                         prefix,
                         limit,
                         verbose,
-                        listOnly);
+                        listOnly,
+                        enableStateTracking,
+                        forceReprocess);
 
                     if (mergeOutput)
                     {
@@ -276,13 +456,33 @@ class Program
                     }
                     else if (!listOnly)
                     {
-                        // Output results for this account separately
-                        await OutputResultsAsync(
-                            records,
-                            format,
-                            outputPath != null ? $"{Path.GetFileNameWithoutExtension(outputPath)}_{account}{Path.GetExtension(outputPath)}" : null,
-                            verbose,
-                            account);
+                        // Post to HTTP endpoint if configured (per account)
+                        if (!string.IsNullOrWhiteSpace(httpEndpoint))
+                        {
+                            if (verbose)
+                                Console.Error.WriteLine($"Posting {records.Count} records from {account} to HTTP endpoint...");
+
+                            using var httpClient = new FlowLogHttpClient(
+                                httpEndpoint,
+                                httpToken,
+                                httpCompression,
+                                httpTimeout,
+                                maxRetries: 3,
+                                verbose: verbose);
+
+                            await httpClient.PostFlowLogsAsync(records, verbose);
+                        }
+
+                        // Output results for this account separately (if file output specified or no HTTP endpoint)
+                        if (!string.IsNullOrWhiteSpace(outputPath) || string.IsNullOrWhiteSpace(httpEndpoint))
+                        {
+                            await OutputResultsAsync(
+                                records,
+                                format,
+                                outputPath != null ? $"{Path.GetFileNameWithoutExtension(outputPath)}_{account}{Path.GetExtension(outputPath)}" : null,
+                                verbose,
+                                account);
+                        }
                     }
                 }
                 catch (Exception ex)
@@ -299,7 +499,28 @@ class Program
                 if (verbose)
                     Console.Error.WriteLine($"\nTotal records parsed from all accounts: {allDenormalizedRecords.Count}");
 
-                await OutputResultsAsync(allDenormalizedRecords, format, outputPath, verbose);
+                // Post to HTTP endpoint if configured
+                if (!string.IsNullOrWhiteSpace(httpEndpoint))
+                {
+                    if (verbose)
+                        Console.Error.WriteLine($"\n=== Posting to HTTP endpoint ===");
+
+                    using var httpClient = new FlowLogHttpClient(
+                        httpEndpoint,
+                        httpToken,
+                        httpCompression,
+                        httpTimeout,
+                        maxRetries: 3,
+                        verbose: verbose);
+
+                    await httpClient.PostFlowLogsAsync(allDenormalizedRecords, verbose);
+                }
+
+                // Output to file or stdout if configured
+                if (!string.IsNullOrWhiteSpace(outputPath) || string.IsNullOrWhiteSpace(httpEndpoint))
+                {
+                    await OutputResultsAsync(allDenormalizedRecords, format, outputPath, verbose);
+                }
             }
         }
         catch (Azure.RequestFailedException ex)
@@ -335,7 +556,9 @@ class Program
         string? prefix,
         int? limit,
         bool verbose,
-        bool listOnly)
+        bool listOnly,
+        bool enableStateTracking,
+        bool forceReprocess)
     {
         if (verbose)
         {
@@ -345,36 +568,92 @@ class Program
         }
 
         // Initialize Azure Storage client with MSI
-        var storageClient = new AzureStorageClient(storageAccount);
+        var storageClient = new AzureStorageClient(storageAccount, verbose);
 
-        // List blobs
+        // Test authentication before proceeding
+        if (verbose)
+            Console.Error.WriteLine("Testing authentication...");
+
+        var authSuccess = await storageClient.TestAuthenticationAsync(verbose);
+        if (!authSuccess)
+        {
+            throw new InvalidOperationException($"Authentication failed for storage account '{storageAccount}'");
+        }
+
+        // List blobs with metadata if state tracking is enabled
         if (verbose)
             Console.Error.WriteLine("Fetching blob list...");
 
-        var blobs = await storageClient.ListBlobsAsync(container, prefix);
+        List<string> blobsToProcess;
+        Dictionary<string, DateTimeOffset> blobMetadata = new();
 
-        if (verbose)
-            Console.Error.WriteLine($"Found {blobs.Count} blob(s)");
-
-        if (blobs.Count == 0)
+        if (enableStateTracking && !listOnly)
         {
-            Console.Error.WriteLine($"No blobs found in storage account '{storageAccount}'");
+            // Get blobs with metadata for state tracking
+            var blobsWithMetadata = await storageClient.ListBlobsWithMetadataAsync(container, prefix);
+
+            if (verbose)
+                Console.Error.WriteLine($"Found {blobsWithMetadata.Count} blob(s)");
+
+            // Filter blobs based on metadata state
+            var filteredBlobs = new List<string>();
+            int skippedCount = 0;
+
+            foreach (var blobInfo in blobsWithMetadata)
+            {
+                blobMetadata[blobInfo.Name] = blobInfo.LastModified;
+
+                if (forceReprocess)
+                {
+                    filteredBlobs.Add(blobInfo.Name);
+                }
+                else
+                {
+                    var shouldProcess = await storageClient.ShouldProcessBlobAsync(container, blobInfo.Name, blobInfo.LastModified);
+                    if (shouldProcess)
+                    {
+                        filteredBlobs.Add(blobInfo.Name);
+                    }
+                    else
+                    {
+                        skippedCount++;
+                    }
+                }
+            }
+
+            blobsToProcess = filteredBlobs;
+
+            if (verbose && skippedCount > 0)
+                Console.Error.WriteLine($"Skipped {skippedCount} blob(s) based on metadata state");
+        }
+        else
+        {
+            // Regular blob listing without metadata
+            blobsToProcess = await storageClient.ListBlobsAsync(container, prefix);
+
+            if (verbose)
+                Console.Error.WriteLine($"Found {blobsToProcess.Count} blob(s)");
+        }
+
+        if (blobsToProcess.Count == 0)
+        {
+            Console.Error.WriteLine($"No blobs to process in storage account '{storageAccount}'");
             return new List<Models.DenormalizedFlowRecord>();
         }
 
         // Apply limit if specified
         if (limit.HasValue && limit.Value > 0)
         {
-            blobs = blobs.Take(limit.Value).ToList();
+            blobsToProcess = blobsToProcess.Take(limit.Value).ToList();
             if (verbose)
-                Console.Error.WriteLine($"Limited to {blobs.Count} blob(s)");
+                Console.Error.WriteLine($"Limited to {blobsToProcess.Count} blob(s)");
         }
 
         // List only mode
         if (listOnly)
         {
             Console.WriteLine($"\nAvailable blobs in {storageAccount}:");
-            foreach (var blob in blobs)
+            foreach (var blob in blobsToProcess)
             {
                 Console.WriteLine($"  - {blob}");
             }
@@ -384,7 +663,7 @@ class Program
         // Download and parse blobs
         var denormalizedRecords = new List<Models.DenormalizedFlowRecord>();
 
-        foreach (var blobName in blobs)
+        foreach (var blobName in blobsToProcess)
         {
             if (verbose)
                 Console.Error.WriteLine($"Processing: {blobName}");
@@ -398,6 +677,15 @@ class Program
                     Console.Error.WriteLine($"  Parsed {records.Count} flow record(s)");
 
                 denormalizedRecords.AddRange(records);
+
+                // Mark blob as processed if state tracking is enabled
+                if (enableStateTracking && blobMetadata.TryGetValue(blobName, out var lastModified))
+                {
+                    await storageClient.MarkBlobAsProcessedAsync(container, blobName, lastModified, records.Count);
+
+                    if (verbose)
+                        Console.Error.WriteLine($"  Marked as processed in blob metadata");
+                }
             }
             catch (Exception ex)
             {
