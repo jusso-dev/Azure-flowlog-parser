@@ -163,6 +163,9 @@ azure-flowlog-parser \
 |--------|-------|-------------|---------|
 | `--http-endpoint` | `-he` | HTTP endpoint URL to POST flow logs | - |
 | `--http-token` | `-ht` | Bearer token for authentication | - |
+| `--http-keyvault` | `-hkv` | Azure Key Vault URL for HTTP credentials | - |
+| `--http-endpoint-secret` | `-hes` | Key Vault secret name for endpoint | `cortexendpoint` |
+| `--http-token-secret` | `-hts` | Key Vault secret name for token | `cortextoken` |
 | `--http-compression` | `-hc` | Enable gzip compression | `true` |
 | `--http-batch-size` | `-hb` | Max records per HTTP batch | `1000` |
 | `--http-timeout` | - | HTTP request timeout (seconds) | `300` |
@@ -263,6 +266,27 @@ dotnet run -- \
   --http-endpoint https://api.example.com/flowlogs \
   --http-token "your-bearer-token" \
   --http-test
+
+# Load HTTP endpoint and token from Key Vault (using default secret names)
+dotnet run -- \
+  --storage-account mystorageaccount \
+  --http-keyvault https://myvault.vault.azure.net/ \
+  --verbose
+
+# Load from Key Vault with custom secret names
+dotnet run -- \
+  --storage-account mystorageaccount \
+  --http-keyvault https://myvault.vault.azure.net/ \
+  --http-endpoint-secret myendpoint \
+  --http-token-secret mytoken \
+  --verbose
+
+# Override endpoint from Key Vault but use CLI token
+dotnet run -- \
+  --storage-account mystorageaccount \
+  --http-keyvault https://myvault.vault.azure.net/ \
+  --http-token "override-token" \
+  --verbose
 ```
 
 ## Output Format
@@ -457,6 +481,49 @@ Gzip compression is enabled by default and significantly reduces payload size:
 - Typical compression ratio: 75-85%
 - Example: 5MB uncompressed → ~1MB compressed
 - Disable with `--http-compression false` for debugging
+
+### Key Vault Configuration
+
+Store HTTP endpoint URL and Bearer token securely in Azure Key Vault:
+
+**Setup:**
+```bash
+# Create secrets with default names (recommended for Cortex)
+az keyvault secret set \
+  --vault-name myvault \
+  --name cortexendpoint \
+  --value "https://api.example.com/flowlogs"
+
+az keyvault secret set \
+  --vault-name myvault \
+  --name cortextoken \
+  --value "your-bearer-token"
+```
+
+**Usage:**
+```bash
+# Tool will automatically load both endpoint and token
+dotnet run -- \
+  --storage-account mystorageaccount \
+  --http-keyvault https://myvault.vault.azure.net/ \
+  --verbose
+```
+
+**Custom Secret Names:**
+If you use different secret names, specify them:
+```bash
+dotnet run -- \
+  --storage-account mystorageaccount \
+  --http-keyvault https://myvault.vault.azure.net/ \
+  --http-endpoint-secret myendpoint \
+  --http-token-secret mytoken \
+  --verbose
+```
+
+**Priority:**
+- CLI arguments (`--http-endpoint`, `--http-token`) take precedence over Key Vault values
+- Key Vault values are only loaded if CLI arguments are not provided
+- This allows overriding specific values while keeping others from Key Vault
 
 ### Use Cases
 
