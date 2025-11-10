@@ -158,6 +158,30 @@ public class AzureStorageClient
     }
 
     /// <summary>
+    /// Lists all blobs in a container with metadata
+    /// </summary>
+    /// <param name="containerName">The container name (default: insights-logs-flowlogflowevent)</param>
+    /// <param name="prefix">Optional prefix to filter blobs</param>
+    /// <returns>List of blob information with metadata</returns>
+    public async Task<List<BlobInfo>> ListBlobsWithMetadataAsync(string containerName, string? prefix = null)
+    {
+        var containerClient = _blobServiceClient.GetBlobContainerClient(containerName);
+        var blobs = new List<BlobInfo>();
+
+        await foreach (var blobItem in containerClient.GetBlobsAsync(prefix: prefix))
+        {
+            blobs.Add(new BlobInfo
+            {
+                Name = blobItem.Name,
+                LastModified = blobItem.Properties.LastModified ?? DateTimeOffset.UtcNow,
+                ContentLength = blobItem.Properties.ContentLength ?? 0
+            });
+        }
+
+        return blobs;
+    }
+
+    /// <summary>
     /// Downloads a blob's content as a string
     /// </summary>
     /// <param name="containerName">The container name</param>
@@ -214,4 +238,80 @@ public class AzureStorageClient
         var properties = await blobClient.GetPropertiesAsync();
         return properties.Value;
     }
+
+    /// <summary>
+    /// Checks if a blob has been processed by looking at its metadata
+    /// </summary>
+    /// <param name="containerName">The container name</param>
+    /// <param name="blobName">The blob name</param>
+    /// <param name="blobLastModified">The blob's LastModified timestamp</param>
+    /// <returns>True if the blob should be processed</returns>
+    public async Task<bool> ShouldProcessBlobAsync(string containerName, string blobName, DateTimeOffset blobLastModified)
+    {
+        try
+        {
+            var properties = await GetBlobPropertiesAsync(containerName, blobName);
+
+            // Check if blob has processing metadata
+            if (properties.Metadata.TryGetValue("lastProcessed", out var lastProcessedStr) &&
+                properties.Metadata.TryGetValue("processedBlobLastModified", out var processedLastModifiedStr))
+            {
+                // Parse the timestamps
+                if (DateTimeOffset.TryParse(processedLastModifiedStr, out var processedLastModified))
+                {
+                    // Only reprocess if the blob has been modified since last processing
+                    return blobLastModified > processedLastModified;
+                }
+            }
+
+            // No metadata found - should process
+            return true;
+        }
+        catch
+        {
+            // If we can't read metadata, assume we should process
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Marks a blob as processed by setting metadata
+    /// </summary>
+    /// <param name="containerName">The container name</param>
+    /// <param name="blobName">The blob name</param>
+    /// <param name="blobLastModified">The blob's LastModified timestamp</param>
+    /// <param name="recordCount">Number of records processed</param>
+    public async Task MarkBlobAsProcessedAsync(string containerName, string blobName, DateTimeOffset blobLastModified, int recordCount)
+    {
+        try
+        {
+            var containerClient = _blobServiceClient.GetBlobContainerClient(containerName);
+            var blobClient = containerClient.GetBlobClient(blobName);
+
+            var metadata = new Dictionary<string, string>
+            {
+                ["lastProcessed"] = DateTimeOffset.UtcNow.ToString("O"),
+                ["processedBlobLastModified"] = blobLastModified.ToString("O"),
+                ["recordCount"] = recordCount.ToString(),
+                ["processedBy"] = "AzureFlowLogParser"
+            };
+
+            await blobClient.SetMetadataAsync(metadata);
+        }
+        catch (Exception ex)
+        {
+            // Log but don't fail if we can't set metadata
+            Console.Error.WriteLine($"Warning: Failed to set metadata on blob {blobName}: {ex.Message}");
+        }
+    }
+}
+
+/// <summary>
+/// Blob information including metadata
+/// </summary>
+public class BlobInfo
+{
+    public string Name { get; set; } = string.Empty;
+    public DateTimeOffset LastModified { get; set; }
+    public long ContentLength { get; set; }
 }

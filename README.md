@@ -6,6 +6,7 @@ A .NET 9 CLI tool that fetches Azure virtual network flow logs from Azure Storag
 
 - **MSI Authentication**: Uses Azure Managed Identity for secure, credential-less authentication
 - **Multiple Storage Accounts**: Process flow logs from multiple storage accounts using file, environment variable, or Azure Key Vault
+- **State Tracking**: Avoid reprocessing flow logs using blob metadata - perfect for CI/CD pipelines running every 5 minutes
 - **HTTP Posting**: POST flow logs to HTTP endpoints with Bearer authentication and gzip compression (one record per request)
 - **Compatible Format**: Parses flow logs in the same format as [PaloAlto Cortex Azure Functions](https://github.com/PaloAltoNetworks/cortex-azure-functions/tree/master/vnet-flow-logs)
 - **Flexible Output**: Supports JSON and JSON Lines (JSONL) output formats, with merged or separate output per account
@@ -280,6 +281,133 @@ dotnet run -- \
   --http-token "override-token" \
   --verbose
 ```
+
+## State Tracking (CI/CD Pipeline Support)
+
+The tool supports state tracking using Azure Blob metadata to avoid reprocessing the same flow logs. This is particularly useful for CI/CD pipelines that run on a schedule (e.g., every 5 minutes).
+
+### Features
+
+- **Blob Metadata Storage**: Processing state is stored directly in Azure Blob metadata (no external state file needed)
+- **Change Detection**: Only processes blobs that have been modified since last processing
+- **CI/CD Friendly**: Perfect for scheduled pipeline execution
+- **No State File Management**: No need to manage separate state files or databases
+- **Force Reprocessing**: Option to ignore state and reprocess all blobs
+
+### State Tracking Options
+
+| Option | Alias | Description | Default |
+|--------|-------|-------------|---------|
+| `--enable-state-tracking` | `-st` | Enable state tracking using blob metadata | `false` |
+| `--force-reprocess` | `-fr` | Force reprocessing, ignoring metadata state | `false` |
+
+### How It Works
+
+When state tracking is enabled:
+
+1. **First Run**: All blobs are processed normally
+2. **Metadata Written**: After successful processing, the tool writes metadata to each blob:
+   - `lastProcessed`: Timestamp when the blob was processed
+   - `processedBlobLastModified`: The blob's LastModified timestamp at processing time
+   - `recordCount`: Number of records parsed from the blob
+   - `processedBy`: Tool identifier ("AzureFlowLogParser")
+3. **Subsequent Runs**: The tool checks each blob's metadata and only processes blobs that:
+   - Have no metadata (never processed)
+   - Have been modified since last processing (LastModified > processedBlobLastModified)
+4. **Skip Processed Blobs**: Blobs that haven't changed are automatically skipped
+
+### Required Permissions
+
+To use state tracking, the Managed Identity needs **Storage Blob Data Contributor** role (not just Reader) to write metadata:
+
+```bash
+az role assignment create \
+  --role "Storage Blob Data Contributor" \
+  --assignee <managed-identity-principal-id> \
+  --scope /subscriptions/<subscription-id>/resourceGroups/<resource-group>/providers/Microsoft.Storage/storageAccounts/<storage-account>
+```
+
+### Examples
+
+#### Basic State Tracking
+
+```bash
+# First run - processes all blobs and writes metadata
+dotnet run -- \
+  --storage-account mystorageaccount \
+  --enable-state-tracking \
+  --verbose
+
+# Second run - only processes new or modified blobs
+dotnet run -- \
+  --storage-account mystorageaccount \
+  --enable-state-tracking \
+  --verbose
+```
+
+#### CI/CD Pipeline Usage
+
+Perfect for scheduled pipelines (e.g., Azure DevOps, GitHub Actions):
+
+```bash
+# Run every 5 minutes - only processes new/changed flow logs
+dotnet run -- \
+  --storage-account mystorageaccount \
+  --enable-state-tracking \
+  --http-endpoint https://api.example.com/flowlogs \
+  --http-keyvault https://myvault.vault.azure.net/ \
+  --verbose
+```
+
+#### Force Reprocessing
+
+```bash
+# Ignore metadata and reprocess everything
+dotnet run -- \
+  --storage-account mystorageaccount \
+  --enable-state-tracking \
+  --force-reprocess \
+  --verbose
+```
+
+#### Multiple Storage Accounts with State Tracking
+
+```bash
+# State tracking works across multiple storage accounts
+dotnet run -- \
+  --accounts-file storage-accounts.txt \
+  --enable-state-tracking \
+  --http-endpoint https://api.example.com/flowlogs \
+  --verbose
+```
+
+### Verbose Output
+
+When running with `--verbose` and `--enable-state-tracking`:
+
+```
+State tracking enabled: Using blob metadata to track processing
+Found 100 blob(s)
+Skipped 95 blob(s) based on metadata state
+Processing: resourceId=.../PT1H.json
+  Parsed 1250 flow record(s)
+  Marked as processed in blob metadata
+```
+
+### Benefits for CI/CD
+
+1. **Efficiency**: Only processes new or changed flow logs, reducing processing time and costs
+2. **Idempotent**: Safe to run multiple times - won't reprocess the same data
+3. **Reliable**: State is stored with the blob itself, no external state management needed
+4. **Simple**: No cleanup or state file rotation required
+5. **Scalable**: Works across multiple storage accounts without state conflicts
+
+### Notes
+
+- State tracking requires write permissions to blob metadata
+- Blob metadata is independent of blob content and doesn't affect the flow log data
+- Force reprocessing (`--force-reprocess`) still writes metadata after processing
+- State tracking has no effect when `--list-only` is used
 
 ## Output Format
 
