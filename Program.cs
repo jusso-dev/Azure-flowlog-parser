@@ -1,4 +1,5 @@
 using System.CommandLine;
+using System.CommandLine.Invocation;
 using System.Text.Json;
 using AzureFlowLogParser.Services;
 
@@ -178,41 +179,42 @@ class Program
         rootCommand.AddOption(enableStateTrackingOption);
         rootCommand.AddOption(forceReprocessOption);
 
-        rootCommand.SetHandler(async (
-            string? storageAccount,
-            string? accountsFile,
-            string? accountsEnv,
-            string? accountsKeyVault,
-            string? keyVaultSecret,
-            string container,
-            string? prefix,
-            string? output,
-            string format,
-            int? limit,
-            bool verbose,
-            bool listOnly,
-            bool mergeOutput,
-            string? httpEndpoint,
-            string? httpToken,
-            bool httpCompression,
-            int httpTimeout,
-            bool httpTest,
-            string? httpKeyVault,
-            string httpEndpointSecret,
-            string httpTokenSecret,
-            bool enableStateTracking,
-            bool forceReprocess) =>
+        rootCommand.SetHandler(async (InvocationContext context) =>
         {
+            var storageAccount = context.ParseResult.GetValueForOption(storageAccountOption);
+            var accountsFile = context.ParseResult.GetValueForOption(accountsFileOption);
+            var accountsEnv = context.ParseResult.GetValueForOption(accountsEnvOption);
+            var accountsKeyVault = context.ParseResult.GetValueForOption(accountsKeyVaultOption);
+            var keyVaultSecret = context.ParseResult.GetValueForOption(keyVaultSecretOption);
+            var container = context.ParseResult.GetValueForOption(containerOption);
+            var prefix = context.ParseResult.GetValueForOption(prefixOption);
+            var output = context.ParseResult.GetValueForOption(outputOption);
+            var format = context.ParseResult.GetValueForOption(formatOption);
+            var limit = context.ParseResult.GetValueForOption(limitOption);
+            var verbose = context.ParseResult.GetValueForOption(verboseOption);
+            var listOnly = context.ParseResult.GetValueForOption(listOnlyOption);
+            var mergeOutput = context.ParseResult.GetValueForOption(mergeOutputOption);
+            var httpEndpoint = context.ParseResult.GetValueForOption(httpEndpointOption);
+            var httpToken = context.ParseResult.GetValueForOption(httpTokenOption);
+            var httpCompression = context.ParseResult.GetValueForOption(httpCompressionOption);
+            var httpTimeout = context.ParseResult.GetValueForOption(httpTimeoutOption);
+            var httpTest = context.ParseResult.GetValueForOption(httpTestOption);
+            var httpKeyVault = context.ParseResult.GetValueForOption(httpKeyVaultOption);
+            var httpEndpointSecret = context.ParseResult.GetValueForOption(httpEndpointSecretOption);
+            var httpTokenSecret = context.ParseResult.GetValueForOption(httpTokenSecretOption);
+            var enableStateTracking = context.ParseResult.GetValueForOption(enableStateTrackingOption);
+            var forceReprocess = context.ParseResult.GetValueForOption(forceReprocessOption);
+
             await ProcessFlowLogsAsync(
                 storageAccount,
                 accountsFile,
                 accountsEnv,
                 accountsKeyVault,
                 keyVaultSecret,
-                container,
+                container!,
                 prefix,
                 output,
-                format,
+                format!,
                 limit,
                 verbose,
                 listOnly,
@@ -223,34 +225,11 @@ class Program
                 httpTimeout,
                 httpTest,
                 httpKeyVault,
-                httpEndpointSecret,
-                httpTokenSecret,
+                httpEndpointSecret!,
+                httpTokenSecret!,
                 enableStateTracking,
                 forceReprocess);
-        },
-        storageAccountOption,
-        accountsFileOption,
-        accountsEnvOption,
-        accountsKeyVaultOption,
-        keyVaultSecretOption,
-        containerOption,
-        prefixOption,
-        outputOption,
-        formatOption,
-        limitOption,
-        verboseOption,
-        listOnlyOption,
-        mergeOutputOption,
-        httpEndpointOption,
-        httpTokenOption,
-        httpCompressionOption,
-        httpTimeoutOption,
-        httpTestOption,
-        httpKeyVaultOption,
-        httpEndpointSecretOption,
-        httpTokenSecretOption,
-        enableStateTrackingOption,
-        forceReprocessOption);
+        });
 
         return await rootCommand.InvokeAsync(args);
     }

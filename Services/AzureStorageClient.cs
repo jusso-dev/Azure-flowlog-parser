@@ -81,7 +81,7 @@ public class AzureStorageClient
 
             // Attempt to list containers (minimal permission required)
             var containers = _blobServiceClient.GetBlobContainersAsync();
-            await foreach (var _ in containers.Take(1))
+            await foreach (var _ in containers)
             {
                 // Successfully authenticated and can access storage
                 break;

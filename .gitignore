@@ -53,3 +53,4 @@ ClientBin/
 *.dbproj.schemaview
 *.publishsettings
 node_modules/
+.claude/settings.local.json
