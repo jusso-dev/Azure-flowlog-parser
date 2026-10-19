@@ -17,9 +17,9 @@
 #   rust-linux-musl
 #     Static x86_64-unknown-linux-musl release build. Uploads bin-rust-linux-musl.
 #   powershell-ubuntu, powershell-windows, powershell-macos
-#     Pester 5.9.1 run of powershell/tests. The ubuntu job also installs the
-#     pinned Az modules so the contract tests run. Uploads testResults.xml as
-#     artifact pester-<os>. -CI makes Pester exit with the failed-test count.
+#     Pester 5.9.1 run of powershell/tests. Azure access is mocked (the
+#     Azure CLI is never called). Uploads testResults.xml as artifact
+#     pester-<os>. -CI makes Pester exit with the failed-test count.
 
 name: ci
 
@@ -188,13 +188,6 @@ jobs:
       - name: Install Pester
         shell: pwsh
         run: Install-Module Pester -RequiredVersion 5.9.1 -Scope CurrentUser -Force
-      - name: Install pinned Az modules
-        if: matrix.os-name == 'ubuntu'
-        shell: pwsh
-        run: |
-          Install-Module Az.Accounts -RequiredVersion 5.5.3 -Scope CurrentUser -Force
-          Install-Module Az.Storage -RequiredVersion 9.7.2 -Scope CurrentUser -Force
-          Install-Module Az.Network -RequiredVersion 8.3.0 -Scope CurrentUser -Force
       - name: Run Pester
         shell: pwsh
         run: |

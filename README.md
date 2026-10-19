@@ -2,7 +2,7 @@
 
 A .NET 10 CLI tool that fetches Azure virtual network flow logs from Azure Storage accounts using Entra ID credentials (managed identity, Azure CLI, or service principal) and parses them into denormalized records.
 
-It also **discovers** every storage account per subscription that receives flow logs or contains them, **monitors** whether flow logs are still being written, and produces an interactive **HTML** or static **PDF** **traffic report** showing flows between storage accounts and for each account individually. The same functionality is available as PowerShell modules in [`powershell/`](powershell/README.md).
+It also **discovers** every storage account per subscription that receives flow logs or contains them, **monitors** whether flow logs are still being written, and produces an interactive **HTML** or static **PDF** **traffic report** showing flows between storage accounts and for each account individually. The same functionality is available as PowerShell modules in [`powershell/`](powershell/README.md), which reach Azure through the Azure CLI (`az`) rather than the Az PowerShell modules.
 
 ## Features
 

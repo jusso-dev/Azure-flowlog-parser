@@ -1,7 +1,32 @@
 {
   "networks": [
-    { "name": "stflowlogsapp01", "kind": "storage", "prefixes": ["10.10.1.0/24"] },
-    { "name": "stflowlogsdata02", "kind": "storage", "prefixes": ["10.20.2.0/24"] },
-    { "name": "vnet-hub", "kind": "vnet", "prefixes": ["10.30.0.0/24"] }
+    {
+      "name": "stflowlogsapp01",
+      "kind": "storage",
+      "prefixes": [
+        "10.10.1.0/24"
+      ]
+    },
+    {
+      "name": "stflowlogsdata02",
+      "kind": "storage",
+      "prefixes": [
+        "10.20.2.0/24"
+      ]
+    },
+    {
+      "name": "vnet-hub",
+      "kind": "vnet",
+      "prefixes": [
+        "10.30.0.0/24"
+      ]
+    }
+  ],
+  "subscriptions": [
+    {
+      "subscriptionId": "00000000-0000-0000-0000-000000000001",
+      "displayName": "Example Production (sample)",
+      "tenantId": "11111111-2222-3333-4444-555555555555"
+    }
   ]
 }
