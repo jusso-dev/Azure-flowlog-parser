@@ -64,6 +64,35 @@ dotnet publish -c Release -o ./publish
 dotnet run -- --storage-account <account-name> [options]
 ```
 
+### Standalone binaries (no runtime needed)
+
+Two builds of the same tool are available. Both produce one executable with the same subcommands (`discover`, `report`, and the root parse command).
+
+**.NET, native AOT** (ahead-of-time compiled, self-contained; about 29 MB on macOS arm64):
+
+```bash
+dotnet publish AzureFlowLogParser.csproj -c Release -r linux-x64   -p:PublishAot=true -o ./dist/linux-x64
+dotnet publish AzureFlowLogParser.csproj -c Release -r win-x64     -p:PublishAot=true -o ./dist/win-x64
+dotnet publish AzureFlowLogParser.csproj -c Release -r osx-arm64   -p:PublishAot=true -o ./dist/osx-arm64
+```
+
+Output: `azure-flowlog-parser` (or `azure-flowlog-parser.exe` on Windows). Native AOT needs `clang` and `zlib1g-dev` on Linux. The .NET build uses invariant globalization, so numbers always print with `1,234`-style separators regardless of the machine locale; this also removes the ICU dependency on Linux.
+
+**Rust** (a single native binary; no .NET or Python runtime, TLS by rustls):
+
+```bash
+cd rust
+cargo build --release                                  # binary: target/release/azure-flowlog-parser
+cargo build --release --target x86_64-unknown-linux-musl   # fully static Linux binary (needs musl-tools)
+```
+
+Azure credentials for both builds come from the same chain: an environment service principal (`AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`), then managed identity (App Service or IMDS), then the Azure CLI (`az account get-access-token`).
+
+### Continuous integration and releases
+
+- `.github/workflows/ci.yml` runs on every push and pull request to `main`. It builds and tests the .NET tool, the Rust crate and the PowerShell modules on Ubuntu, Windows and macOS. It also builds the .NET AOT binaries for each platform and a static musl build of the Rust binary. Each job uploads its binaries or Pester results as artifacts.
+- `.github/workflows/release.yml` runs on tags matching `v*`. It calls the same build jobs, then creates a GitHub release with every binary and a `SHA256SUMS` file.
+
 ## Usage
 
 ### Basic Usage
@@ -355,6 +384,19 @@ Limits: the report embeds at most 20,000 aggregated rows (totals still cover eve
 ### Examples
 
 Sample reports generated from the offline data in [`examples/`](examples/README.md) are committed for both this tool and the PowerShell modules.
+
+## Rust port: differences from the .NET tool
+
+The Rust binary implements the same report, discovery and parse behaviour. Offline reports (`--input`) produce payloads identical to the .NET tool on the committed examples. These differences remain:
+
+- **Short options:** the .NET multi-letter aliases (`-af`, `-ae`, `-akv`, `-kvs`, `-he`, `-ht`, `-hc`, `-hkv`, `-hes`, `-hts`, `-st`, `-fr`) are not available; use the long names. Single-letter shorts (`-s`, `-c`, `-p`, `-o`, `-f`, `-l`, `-v`, `-m`) are the same.
+- **JSON keys:** case-sensitive in Rust. The .NET reader accepts any casing for flow log blobs and topology files. Azure writes the standard casing.
+- **IPv4:** dotted-quad only. The .NET reader also accepts shorthand such as `10.1`.
+- **Window times:** absolute `--since`/`--until` accept RFC 3339 and common naive forms. The .NET parser accepts more formats.
+- **Offline `--topology` without `--input`:** both tools warn and then use Azure. The .NET tool prints a multi-line credential-chain error on authentication failure; the Rust tool prints one line.
+- **Parse output:** a non-merge run writes `<name>_<account><ext>` into the directory of the requested output file. The .NET tool wrote it into the working directory.
+- **Verbose errors:** show the error chain, not a stack trace. Logged HTTP endpoints show scheme, host and path only.
+- **Verification status:** offline reports are verified against the .NET tool. The Azure paths (discovery, reads, Key Vault, HTTP posting) are unit-tested against documented REST shapes but have not yet been run against a live subscription.
 
 ## State Tracking (CI/CD Pipeline Support)
 
