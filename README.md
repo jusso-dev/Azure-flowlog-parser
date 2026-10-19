@@ -1,6 +1,8 @@
 # Azure VNet Flow Log Parser
 
-A .NET 9 CLI tool that fetches Azure virtual network flow logs from Azure Storage accounts using Managed Service Identity (MSI) credentials and parses them into denormalized records.
+A .NET 10 CLI tool that fetches Azure virtual network flow logs from Azure Storage accounts using Entra ID credentials (managed identity, Azure CLI, or service principal) and parses them into denormalized records.
+
+It also **discovers** every storage account per subscription that receives flow logs or contains them, **monitors** whether flow logs are still being written, and produces an interactive **HTML** or static **PDF** **traffic report** showing flows between storage accounts and for each account individually. The same functionality is available as PowerShell modules in [`powershell/`](powershell/README.md).
 
 ## Features
 
@@ -12,10 +14,13 @@ A .NET 9 CLI tool that fetches Azure virtual network flow logs from Azure Storag
 - **Flexible Output**: Supports JSON and JSON Lines (JSONL) output formats, with merged or separate output per account
 - **Filtering**: Filter blobs by prefix and limit the number of processed files
 - **Local Development**: Supports Azure CLI credentials for local testing
+- **Discovery and monitoring**: `discover` lists storage accounts with flow log configurations or flow log blobs, and flags flow logs that are disabled, stale, have no data, or cannot be read
+- **Traffic reports**: `report` writes an interactive HTML report (filters, scope graph, sortable tables) or a PDF with the same content, between storage accounts and per account
+- **Offline reports**: `report --input` runs on downloaded `PT1H.json` files, optionally with a topology file (see [examples](examples/README.md))
 
 ## Prerequisites
 
-- .NET 9.0 SDK or runtime
+- .NET 10.0 SDK or runtime (the project targets `net10.0`, the current LTS release)
 - Azure Storage account with VNet flow logs
 - One of the following for authentication:
   - Managed Identity (when running in Azure)
@@ -281,6 +286,75 @@ dotnet run -- \
   --http-token "override-token" \
   --verbose
 ```
+
+## Discovery and Traffic Reports
+
+### Discover storage accounts and check flow log health
+
+```bash
+# Every enabled subscription the identity can read
+azure-flowlog-parser discover
+
+# Specific subscriptions, JSON for pipelines, flag flow logs older than 3 hours
+azure-flowlog-parser discover --subscription <sub-id> --subscription <sub-id-2> \
+  --stale-hours 3 --output-format json -o inventory.json
+
+# Also list accounts that have neither flow log configurations nor flow log blobs
+azure-flowlog-parser discover --all
+```
+
+A storage account is listed when it is the destination of a flow log configuration (network watcher flow log) or its `insights-logs-flowlogflowevent` container holds flow log blobs. Each flow log configuration is checked against the blobs it writes (today and yesterday, per target):
+
+| Status | Meaning |
+|--------|---------|
+| `Healthy` | Newest blob is within `--stale-hours` |
+| `Stale` | Blobs exist but the newest is older than `--stale-hours` |
+| `NoData` | No blobs in the last two days |
+| `Disabled` | Flow log configuration is disabled (not read) |
+| `Unmanaged` | Account has flow log blobs but no configuration (shows the source resource it found) |
+| `AccessDenied` | Identity cannot list the container or blobs (needs `Storage Blob Data Reader`) |
+| `Error` | Any other failure, with the message |
+
+An account's status is the worst status among its configurations. Accounts whose container cannot be read (`AccessDenied`) are listed even without a proven flow log, so the gap is visible; `--all` adds accounts with neither flow logs nor blobs.
+
+### Generate a traffic report
+
+```bash
+# Interactive HTML for the last 24 hours across all discovered accounts
+azure-flowlog-parser report --report html
+
+# Static PDF, denied traffic only, for one subscription
+azure-flowlog-parser report --report pdf --action deny --subscription <sub-id> -o denied.pdf
+
+# SQL traffic (destination port 1433, TCP) for an explicit window
+azure-flowlog-parser report --since 2026-10-18T10:00:00Z --until 2026-10-18T13:00:00Z \
+  --port 1433 --protocol tcp --report html
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--since` | `24h` (Azure); observed range (`--input`) | Window start: `90m`, `24h`, `7d` or ISO-8601 UTC |
+| `--until` | now (Azure); observed range (`--input`) | Window end, same formats |
+| `--action` | `all` | `all`, `allow` or `deny` |
+| `--protocol` | `all` | `all`, `tcp` or `udp` |
+| `--port` | any | Destination ports, e.g. `443,8000-8100` |
+| `--ip` | any | Keep observations whose source or destination contains this text |
+| `--min-bytes` | `0` | Keep observations with at least this many bytes |
+| `--report` | `html` | `html` (interactive) or `pdf` (static) |
+| `--input` | - | Offline: local `PT1H.json` files or folders instead of Azure |
+| `--topology` | - | Offline only: JSON mapping prefixes to storage accounts or VNets |
+
+**How flows are attributed.** Each flow tuple's source and destination IPv4 address is matched (longest prefix) against NIC private addresses with a flow-logged NSG, then subnets with a flow-logged NSG, then VNet address spaces. A VNet with flow logs belongs to its storage account. A VNet without flow logs appears as `vnet:<rg>/<name>`. Public addresses that match nothing are `Internet`; private ones are `Unmapped`.
+
+**How observations are counted.** Each NSG or VNet flow tuple is one observation. A flow that crosses two logged networks is observed at both. To avoid counting it twice, an *allowed inbound* observation whose source sits in a storage account that is read in the same run is skipped (its outbound twin is counted at the source). Denied inbound observations are kept, because they are a separate decision. The number skipped appears in the report summary.
+
+**What the report contains.** Summary metrics; flow log monitoring (accounts and configurations with status and age); traffic between scopes; an individual view per storage account (inbound and outbound flows, denied counts, top peers and destination ports); top flow rows; notes on the counting and mapping rules. The HTML version adds a scope graph and filters that work in the browser without a server: focus scope, action, protocol, destination ports, IP text and minimum bytes. The HTML file is self-contained and makes no network requests.
+
+Limits: the report embeds at most 20,000 aggregated rows (totals still cover every observation), and filters apply per observation on the command line and per aggregated row in the HTML.
+
+### Examples
+
+Sample reports generated from the offline data in [`examples/`](examples/README.md) are committed for both this tool and the PowerShell modules.
 
 ## State Tracking (CI/CD Pipeline Support)
 
@@ -688,13 +762,16 @@ dotnet run -- \
 
 ## Dependencies
 
-- `Azure.Identity` - Azure authentication (MSI, Azure CLI, Service Principal)
-- `Azure.Security.KeyVault.Secrets` - Azure Key Vault secret retrieval
-- `Azure.Storage.Blobs` - Azure Blob Storage client
-- `Polly` - Resilience and transient-fault-handling with retry policies
-- `Polly.Extensions.Http` - Polly extensions for HttpClient
-- `System.CommandLine` - CLI argument parsing
-- `System.Text.Json` - JSON serialization
+- `Azure.Identity` 1.21 - Entra ID authentication (managed identity, Azure CLI, service principal)
+- `Azure.ResourceManager` 1.14, `Azure.ResourceManager.Network` 1.17, `Azure.ResourceManager.Storage` 1.8, `Azure.ResourceManager.Resources` 1.12 - subscriptions, storage accounts, network watchers and flow logs, VNets, NICs
+- `Azure.Security.KeyVault.Secrets` 4.11 - Azure Key Vault secret retrieval
+- `Azure.Storage.Blobs` 12.30 - Azure Blob Storage client
+- `Polly` 8.8 - Resilience and transient-fault-handling with retry policies
+- `System.CommandLine` 2.0.13 - CLI argument parsing
+
+The PDF writer is built into the project (no PDF library dependency). The HTML template is embedded from `shared/report-template.html`.
+
+Tests (in `tests/AzureFlowLogParser.Tests`, not shipped) use xUnit v3 and the Microsoft Testing Platform. Run them with `dotnet test`; the repository's `global.json` selects the Microsoft Testing Platform runner.
 
 ## License
 

@@ -149,7 +149,7 @@ public class AzureStorageClient
         var containerClient = _blobServiceClient.GetBlobContainerClient(containerName);
         var blobs = new List<string>();
 
-        await foreach (var blobItem in containerClient.GetBlobsAsync(prefix: prefix))
+        await foreach (var blobItem in containerClient.GetBlobsAsync(BlobTraits.None, BlobStates.None, prefix, default))
         {
             blobs.Add(blobItem.Name);
         }
@@ -168,7 +168,7 @@ public class AzureStorageClient
         var containerClient = _blobServiceClient.GetBlobContainerClient(containerName);
         var blobs = new List<BlobInfo>();
 
-        await foreach (var blobItem in containerClient.GetBlobsAsync(prefix: prefix))
+        await foreach (var blobItem in containerClient.GetBlobsAsync(BlobTraits.None, BlobStates.None, prefix, default))
         {
             blobs.Add(new BlobInfo
             {

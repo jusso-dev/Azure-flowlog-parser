@@ -1,6 +1,6 @@
 using System.CommandLine;
-using System.CommandLine.Invocation;
 using System.Text.Json;
+using AzureFlowLogParser.Commands;
 using AzureFlowLogParser.Services;
 
 namespace AzureFlowLogParser;
@@ -10,200 +10,190 @@ class Program
     static async Task<int> Main(string[] args)
     {
         // Define CLI options for storage account sources
-        var storageAccountOption = new Option<string?>(
-            name: "--storage-account",
-            description: "Single Azure storage account name (use this OR one of the multi-account options)")
+        var storageAccountOption = new Option<string?>("--storage-account", "-s")
         {
-            IsRequired = false
+            Description = "Single Azure storage account name (use this OR one of the multi-account options)"
         };
-        storageAccountOption.AddAlias("-s");
 
-        var accountsFileOption = new Option<string?>(
-            name: "--accounts-file",
-            description: "Path to file containing storage account names (one per line or comma-separated)",
-            getDefaultValue: () => null);
-        accountsFileOption.AddAlias("-af");
+        var accountsFileOption = new Option<string?>("--accounts-file", "-af")
+        {
+            Description = "Path to file containing storage account names (one per line or comma-separated)"
+        };
 
-        var accountsEnvOption = new Option<string?>(
-            name: "--accounts-env",
-            description: "Environment variable name containing comma-separated storage account names",
-            getDefaultValue: () => null);
-        accountsEnvOption.AddAlias("-ae");
+        var accountsEnvOption = new Option<string?>("--accounts-env", "-ae")
+        {
+            Description = "Environment variable name containing comma-separated storage account names"
+        };
 
-        var accountsKeyVaultOption = new Option<string?>(
-            name: "--accounts-keyvault",
-            description: "Azure Key Vault URL (e.g., https://myvault.vault.azure.net/)",
-            getDefaultValue: () => null);
-        accountsKeyVaultOption.AddAlias("-akv");
+        var accountsKeyVaultOption = new Option<string?>("--accounts-keyvault", "-akv")
+        {
+            Description = "Azure Key Vault URL (e.g., https://myvault.vault.azure.net/)"
+        };
 
-        var keyVaultSecretOption = new Option<string?>(
-            name: "--keyvault-secret",
-            description: "Key Vault secret name containing comma-separated storage account names",
-            getDefaultValue: () => null);
-        keyVaultSecretOption.AddAlias("-kvs");
+        var keyVaultSecretOption = new Option<string?>("--keyvault-secret", "-kvs")
+        {
+            Description = "Key Vault secret name containing comma-separated storage account names"
+        };
 
         // Container and filtering options
-        var containerOption = new Option<string>(
-            name: "--container",
-            description: "The container name containing flow logs",
-            getDefaultValue: () => "insights-logs-flowlogflowevent");
-        containerOption.AddAlias("-c");
+        var containerOption = new Option<string>("--container", "-c")
+        {
+            Description = "The container name containing flow logs",
+            DefaultValueFactory = _ => "insights-logs-flowlogflowevent"
+        };
 
-        var prefixOption = new Option<string?>(
-            name: "--prefix",
-            description: "Filter blobs by prefix (optional)",
-            getDefaultValue: () => null);
-        prefixOption.AddAlias("-p");
+        var prefixOption = new Option<string?>("--prefix", "-p")
+        {
+            Description = "Filter blobs by prefix (optional)"
+        };
 
         // Output options
-        var outputOption = new Option<string?>(
-            name: "--output",
-            description: "Output file path (optional, prints to stdout if not specified)",
-            getDefaultValue: () => null);
-        outputOption.AddAlias("-o");
+        var outputOption = new Option<string?>("--output", "-o")
+        {
+            Description = "Output file path (optional, prints to stdout if not specified)"
+        };
 
-        var formatOption = new Option<string>(
-            name: "--format",
-            description: "Output format: json (default) or jsonl (JSON Lines)",
-            getDefaultValue: () => "json");
-        formatOption.AddAlias("-f");
+        var formatOption = new Option<string>("--format", "-f")
+        {
+            Description = "Output format: json (default) or jsonl (JSON Lines)",
+            DefaultValueFactory = _ => "json"
+        };
 
-        var limitOption = new Option<int?>(
-            name: "--limit",
-            description: "Limit the number of blobs to process per storage account (optional)",
-            getDefaultValue: () => null);
-        limitOption.AddAlias("-l");
+        var limitOption = new Option<int?>("--limit", "-l")
+        {
+            Description = "Limit the number of blobs to process per storage account (optional)"
+        };
 
         // Control options
-        var verboseOption = new Option<bool>(
-            name: "--verbose",
-            description: "Enable verbose output",
-            getDefaultValue: () => false);
-        verboseOption.AddAlias("-v");
+        var verboseOption = new Option<bool>("--verbose", "-v")
+        {
+            Description = "Enable verbose output"
+        };
 
-        var listOnlyOption = new Option<bool>(
-            name: "--list-only",
-            description: "Only list available blobs without processing",
-            getDefaultValue: () => false);
+        var listOnlyOption = new Option<bool>("--list-only")
+        {
+            Description = "Only list available blobs without processing"
+        };
 
-        var mergeOutputOption = new Option<bool>(
-            name: "--merge-output",
-            description: "Merge results from all storage accounts into a single output (default: true)",
-            getDefaultValue: () => true);
-        mergeOutputOption.AddAlias("-m");
+        var mergeOutputOption = new Option<bool>("--merge-output", "-m")
+        {
+            Description = "Merge results from all storage accounts into a single output (default: true)",
+            DefaultValueFactory = _ => true
+        };
 
         // HTTP posting options
-        var httpEndpointOption = new Option<string?>(
-            name: "--http-endpoint",
-            description: "HTTP endpoint URL to POST flow logs to (optional)",
-            getDefaultValue: () => null);
-        httpEndpointOption.AddAlias("-he");
+        var httpEndpointOption = new Option<string?>("--http-endpoint", "-he")
+        {
+            Description = "HTTP endpoint URL to POST flow logs to (optional)"
+        };
 
-        var httpTokenOption = new Option<string?>(
-            name: "--http-token",
-            description: "Bearer token for HTTP endpoint authentication (optional)",
-            getDefaultValue: () => null);
-        httpTokenOption.AddAlias("-ht");
+        var httpTokenOption = new Option<string?>("--http-token", "-ht")
+        {
+            Description = "Bearer token for HTTP endpoint authentication (optional)"
+        };
 
-        var httpCompressionOption = new Option<bool>(
-            name: "--http-compression",
-            description: "Enable gzip compression for HTTP requests (default: true)",
-            getDefaultValue: () => true);
-        httpCompressionOption.AddAlias("-hc");
+        var httpCompressionOption = new Option<bool>("--http-compression", "-hc")
+        {
+            Description = "Enable gzip compression for HTTP requests (default: true)",
+            DefaultValueFactory = _ => true
+        };
 
-        var httpTimeoutOption = new Option<int>(
-            name: "--http-timeout",
-            description: "HTTP request timeout in seconds (default: 300)",
-            getDefaultValue: () => 300);
+        var httpTimeoutOption = new Option<int>("--http-timeout")
+        {
+            Description = "HTTP request timeout in seconds (default: 300)",
+            DefaultValueFactory = _ => 300
+        };
 
-        var httpTestOption = new Option<bool>(
-            name: "--http-test",
-            description: "Test HTTP endpoint connectivity without processing logs",
-            getDefaultValue: () => false);
+        var httpTestOption = new Option<bool>("--http-test")
+        {
+            Description = "Test HTTP endpoint connectivity without processing logs"
+        };
 
-        var httpKeyVaultOption = new Option<string?>(
-            name: "--http-keyvault",
-            description: "Azure Key Vault URL to load HTTP endpoint and token from",
-            getDefaultValue: () => null);
-        httpKeyVaultOption.AddAlias("-hkv");
+        var httpKeyVaultOption = new Option<string?>("--http-keyvault", "-hkv")
+        {
+            Description = "Azure Key Vault URL to load HTTP endpoint and token from"
+        };
 
-        var httpEndpointSecretOption = new Option<string>(
-            name: "--http-endpoint-secret",
-            description: "Key Vault secret name for HTTP endpoint URL",
-            getDefaultValue: () => "cortexendpoint");
-        httpEndpointSecretOption.AddAlias("-hes");
+        var httpEndpointSecretOption = new Option<string>("--http-endpoint-secret", "-hes")
+        {
+            Description = "Key Vault secret name for HTTP endpoint URL",
+            DefaultValueFactory = _ => "cortexendpoint"
+        };
 
-        var httpTokenSecretOption = new Option<string>(
-            name: "--http-token-secret",
-            description: "Key Vault secret name for Bearer token",
-            getDefaultValue: () => "cortextoken");
-        httpTokenSecretOption.AddAlias("-hts");
+        var httpTokenSecretOption = new Option<string>("--http-token-secret", "-hts")
+        {
+            Description = "Key Vault secret name for Bearer token",
+            DefaultValueFactory = _ => "cortextoken"
+        };
 
         // State tracking options
-        var enableStateTrackingOption = new Option<bool>(
-            name: "--enable-state-tracking",
-            description: "Enable state tracking using blob metadata to avoid reprocessing (useful for CI/CD pipelines)",
-            getDefaultValue: () => true);
-        enableStateTrackingOption.AddAlias("-st");
+        var enableStateTrackingOption = new Option<bool>("--enable-state-tracking", "-st")
+        {
+            Description = "Enable state tracking using blob metadata to avoid reprocessing (useful for CI/CD pipelines)",
+            DefaultValueFactory = _ => true
+        };
 
-        var forceReprocessOption = new Option<bool>(
-            name: "--force-reprocess",
-            description: "Force reprocessing of all blobs, ignoring metadata state",
-            getDefaultValue: () => false);
-        forceReprocessOption.AddAlias("-fr");
+        var forceReprocessOption = new Option<bool>("--force-reprocess", "-fr")
+        {
+            Description = "Force reprocessing of all blobs, ignoring metadata state"
+        };
 
         // Create root command
-        var rootCommand = new RootCommand("Azure VNet Flow Log Parser - Fetches and parses Azure virtual network flow logs using MSI credentials");
+        var rootCommand = new RootCommand("Azure VNet Flow Log Parser - Fetches and parses Azure virtual network flow logs using Entra ID credentials");
 
-        rootCommand.AddOption(storageAccountOption);
-        rootCommand.AddOption(accountsFileOption);
-        rootCommand.AddOption(accountsEnvOption);
-        rootCommand.AddOption(accountsKeyVaultOption);
-        rootCommand.AddOption(keyVaultSecretOption);
-        rootCommand.AddOption(containerOption);
-        rootCommand.AddOption(prefixOption);
-        rootCommand.AddOption(outputOption);
-        rootCommand.AddOption(formatOption);
-        rootCommand.AddOption(limitOption);
-        rootCommand.AddOption(verboseOption);
-        rootCommand.AddOption(listOnlyOption);
-        rootCommand.AddOption(mergeOutputOption);
-        rootCommand.AddOption(httpEndpointOption);
-        rootCommand.AddOption(httpTokenOption);
-        rootCommand.AddOption(httpCompressionOption);
-        rootCommand.AddOption(httpTimeoutOption);
-        rootCommand.AddOption(httpTestOption);
-        rootCommand.AddOption(httpKeyVaultOption);
-        rootCommand.AddOption(httpEndpointSecretOption);
-        rootCommand.AddOption(httpTokenSecretOption);
-        rootCommand.AddOption(enableStateTrackingOption);
-        rootCommand.AddOption(forceReprocessOption);
+        rootCommand.Add(storageAccountOption);
+        rootCommand.Add(accountsFileOption);
+        rootCommand.Add(accountsEnvOption);
+        rootCommand.Add(accountsKeyVaultOption);
+        rootCommand.Add(keyVaultSecretOption);
+        rootCommand.Add(containerOption);
+        rootCommand.Add(prefixOption);
+        rootCommand.Add(outputOption);
+        rootCommand.Add(formatOption);
+        rootCommand.Add(limitOption);
+        rootCommand.Add(verboseOption);
+        rootCommand.Add(listOnlyOption);
+        rootCommand.Add(mergeOutputOption);
+        rootCommand.Add(httpEndpointOption);
+        rootCommand.Add(httpTokenOption);
+        rootCommand.Add(httpCompressionOption);
+        rootCommand.Add(httpTimeoutOption);
+        rootCommand.Add(httpTestOption);
+        rootCommand.Add(httpKeyVaultOption);
+        rootCommand.Add(httpEndpointSecretOption);
+        rootCommand.Add(httpTokenSecretOption);
+        rootCommand.Add(enableStateTrackingOption);
+        rootCommand.Add(forceReprocessOption);
 
-        rootCommand.SetHandler(async (InvocationContext context) =>
+        // Discovery, monitoring and traffic report subcommands
+        rootCommand.Add(DiscoverCommand.Create());
+        rootCommand.Add(ReportCommand.Create());
+
+        rootCommand.SetAction(async (ParseResult parseResult, CancellationToken cancellationToken) =>
         {
-            var storageAccount = context.ParseResult.GetValueForOption(storageAccountOption);
-            var accountsFile = context.ParseResult.GetValueForOption(accountsFileOption);
-            var accountsEnv = context.ParseResult.GetValueForOption(accountsEnvOption);
-            var accountsKeyVault = context.ParseResult.GetValueForOption(accountsKeyVaultOption);
-            var keyVaultSecret = context.ParseResult.GetValueForOption(keyVaultSecretOption);
-            var container = context.ParseResult.GetValueForOption(containerOption);
-            var prefix = context.ParseResult.GetValueForOption(prefixOption);
-            var output = context.ParseResult.GetValueForOption(outputOption);
-            var format = context.ParseResult.GetValueForOption(formatOption);
-            var limit = context.ParseResult.GetValueForOption(limitOption);
-            var verbose = context.ParseResult.GetValueForOption(verboseOption);
-            var listOnly = context.ParseResult.GetValueForOption(listOnlyOption);
-            var mergeOutput = context.ParseResult.GetValueForOption(mergeOutputOption);
-            var httpEndpoint = context.ParseResult.GetValueForOption(httpEndpointOption);
-            var httpToken = context.ParseResult.GetValueForOption(httpTokenOption);
-            var httpCompression = context.ParseResult.GetValueForOption(httpCompressionOption);
-            var httpTimeout = context.ParseResult.GetValueForOption(httpTimeoutOption);
-            var httpTest = context.ParseResult.GetValueForOption(httpTestOption);
-            var httpKeyVault = context.ParseResult.GetValueForOption(httpKeyVaultOption);
-            var httpEndpointSecret = context.ParseResult.GetValueForOption(httpEndpointSecretOption);
-            var httpTokenSecret = context.ParseResult.GetValueForOption(httpTokenSecretOption);
-            var enableStateTracking = context.ParseResult.GetValueForOption(enableStateTrackingOption);
-            var forceReprocess = context.ParseResult.GetValueForOption(forceReprocessOption);
+            var storageAccount = parseResult.GetValue(storageAccountOption);
+            var accountsFile = parseResult.GetValue(accountsFileOption);
+            var accountsEnv = parseResult.GetValue(accountsEnvOption);
+            var accountsKeyVault = parseResult.GetValue(accountsKeyVaultOption);
+            var keyVaultSecret = parseResult.GetValue(keyVaultSecretOption);
+            var container = parseResult.GetValue(containerOption);
+            var prefix = parseResult.GetValue(prefixOption);
+            var output = parseResult.GetValue(outputOption);
+            var format = parseResult.GetValue(formatOption);
+            var limit = parseResult.GetValue(limitOption);
+            var verbose = parseResult.GetValue(verboseOption);
+            var listOnly = parseResult.GetValue(listOnlyOption);
+            var mergeOutput = parseResult.GetValue(mergeOutputOption);
+            var httpEndpoint = parseResult.GetValue(httpEndpointOption);
+            var httpToken = parseResult.GetValue(httpTokenOption);
+            var httpCompression = parseResult.GetValue(httpCompressionOption);
+            var httpTimeout = parseResult.GetValue(httpTimeoutOption);
+            var httpTest = parseResult.GetValue(httpTestOption);
+            var httpKeyVault = parseResult.GetValue(httpKeyVaultOption);
+            var httpEndpointSecret = parseResult.GetValue(httpEndpointSecretOption);
+            var httpTokenSecret = parseResult.GetValue(httpTokenSecretOption);
+            var enableStateTracking = parseResult.GetValue(enableStateTrackingOption);
+            var forceReprocess = parseResult.GetValue(forceReprocessOption);
 
             await ProcessFlowLogsAsync(
                 storageAccount,
@@ -229,9 +219,11 @@ class Program
                 httpTokenSecret!,
                 enableStateTracking,
                 forceReprocess);
+
+            return 0;
         });
 
-        return await rootCommand.InvokeAsync(args);
+        return await rootCommand.Parse(args).InvokeAsync();
     }
 
     static async Task ProcessFlowLogsAsync(
