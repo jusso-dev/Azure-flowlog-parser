@@ -1,0 +1,207 @@
+# CI for the three deliverables: the .NET CLI (AzureFlowLogParser.csproj),
+# the Rust crate (rust/) and the PowerShell modules (powershell/).
+#
+# Triggers: push and pull_request on main, workflow_dispatch, and workflow_call.
+# release.yml calls this file, so a release ships the binaries these jobs build.
+#
+# Shells: dotnet and rust jobs run bash (Git Bash on Windows). PowerShell jobs
+# run pwsh. Package-install steps (apt, brew) run bash.
+#
+# Jobs (one matrix per deliverable; the job name is the check name):
+#   dotnet-ubuntu, dotnet-windows, dotnet-macos
+#     dotnet test, then Native AOT publish for linux-x64, win-x64, osx-arm64.
+#     Uploads the binary as artifact bin-dotnet-<os>.
+#   rust-ubuntu, rust-windows, rust-macos
+#     rustc >= 1.85 check, cargo test --locked, cargo build --release --locked.
+#     Uploads the binary as artifact bin-rust-<os>.
+#   rust-linux-musl
+#     Static x86_64-unknown-linux-musl release build. Uploads bin-rust-linux-musl.
+#   powershell-ubuntu, powershell-windows, powershell-macos
+#     Pester 5.9.1 run of powershell/tests. The ubuntu job also installs the
+#     pinned Az modules so the contract tests run. Uploads testResults.xml as
+#     artifact pester-<os>. -CI makes Pester exit with the failed-test count.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  dotnet:
+    name: dotnet-${{ matrix.os-name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os-name: ubuntu
+            runner: ubuntu-latest
+            rid: linux-x64
+            ext: ""
+            asset: azure-flowlog-parser-dotnet-linux-x64
+          - os-name: windows
+            runner: windows-latest
+            rid: win-x64
+            ext: .exe
+            asset: azure-flowlog-parser-dotnet-win-x64.exe
+          - os-name: macos
+            runner: macos-latest
+            rid: osx-arm64
+            ext: ""
+            asset: azure-flowlog-parser-dotnet-osx-arm64
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-dotnet@v6.0.0
+        with:
+          dotnet-version: 10.0.x
+      - name: Install NativeAOT prerequisites
+        if: matrix.os-name == 'ubuntu'
+        run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev
+      - name: Test
+        run: dotnet test tests/AzureFlowLogParser.Tests
+      - name: Publish Native AOT
+        run: dotnet publish -c Release -r ${{ matrix.rid }} -p:PublishAot=true -o out
+      - name: Stage binary
+        run: |
+          mkdir dist
+          cp out/azure-flowlog-parser${{ matrix.ext }} dist/${{ matrix.asset }}
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: bin-dotnet-${{ matrix.os-name }}
+          path: dist/*
+          if-no-files-found: error
+
+  rust:
+    name: rust-${{ matrix.os-name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os-name: ubuntu
+            runner: ubuntu-latest
+            ext: ""
+            asset: azure-flowlog-parser-rust-linux-x64
+          - os-name: windows
+            runner: windows-latest
+            ext: .exe
+            asset: azure-flowlog-parser-rust-win-x64.exe
+          - os-name: macos
+            runner: macos-latest
+            ext: ""
+            asset: azure-flowlog-parser-rust-osx-arm64
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Check rustc is 1.85 or newer
+        run: |
+          min=1.85.0
+          current=$(rustc --version | awk '{print $2}')
+          if [ "$(printf '%s\n' "$min" "$current" | sort -V | head -n 1)" != "$min" ]; then
+            echo "rustc $current is older than $min"
+            exit 1
+          fi
+      - name: Test
+        working-directory: rust
+        run: cargo test --locked
+      - name: Build release
+        working-directory: rust
+        run: cargo build --release --locked
+      - name: Stage binary
+        run: |
+          mkdir dist
+          cp rust/target/release/azure-flowlog-parser${{ matrix.ext }} dist/${{ matrix.asset }}
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: bin-rust-${{ matrix.os-name }}
+          path: dist/*
+          if-no-files-found: error
+
+  rust-linux-musl:
+    name: rust-linux-musl
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Install musl target
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+          rustup target add x86_64-unknown-linux-musl
+      - name: Build static release
+        working-directory: rust
+        run: cargo build --release --locked --target x86_64-unknown-linux-musl
+      - name: Stage binary
+        run: |
+          mkdir dist
+          cp rust/target/x86_64-unknown-linux-musl/release/azure-flowlog-parser dist/azure-flowlog-parser-rust-linux-x64-musl
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: bin-rust-linux-musl
+          path: dist/*
+          if-no-files-found: error
+
+  powershell:
+    name: powershell-${{ matrix.os-name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os-name: ubuntu
+            runner: ubuntu-latest
+          - os-name: windows
+            runner: windows-latest
+          - os-name: macos
+            runner: macos-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Ensure PowerShell 7.6
+        shell: pwsh
+        run: |
+          if ($PSVersionTable.PSVersion -lt [version]'7.6') {
+            dotnet tool install --global PowerShell --version 7.6.7
+            Add-Content -Path $env:GITHUB_PATH -Value (Join-Path $HOME '.dotnet' 'tools')
+          }
+      - name: Install qpdf (Ubuntu)
+        if: matrix.os-name == 'ubuntu'
+        run: sudo apt-get update && sudo apt-get install -y qpdf
+      - name: Install qpdf (macOS)
+        if: matrix.os-name == 'macos'
+        run: brew install qpdf
+      - name: Install Pester
+        shell: pwsh
+        run: Install-Module Pester -RequiredVersion 5.9.1 -Scope CurrentUser -Force
+      - name: Install pinned Az modules
+        if: matrix.os-name == 'ubuntu'
+        shell: pwsh
+        run: |
+          Install-Module Az.Accounts -RequiredVersion 5.5.3 -Scope CurrentUser -Force
+          Install-Module Az.Storage -RequiredVersion 9.7.2 -Scope CurrentUser -Force
+          Install-Module Az.Network -RequiredVersion 8.3.0 -Scope CurrentUser -Force
+      - name: Run Pester
+        shell: pwsh
+        run: |
+          Import-Module Pester -RequiredVersion 5.9.1
+          Invoke-Pester powershell/tests -CI
+      - uses: actions/upload-artifact@v7.0.2
+        if: always()
+        with:
+          name: pester-${{ matrix.os-name }}
+          path: testResults.xml
