@@ -19,13 +19,13 @@ function Get-FlowLogWindowBlob {
 }
 
 function Read-FlowLogAccount {
-    # Reads every blob for one account in the plan. Failures become notes; the account stays in the read set.
+    # Reads every blob for one account in the plan. A failed account is added to $Failed; it stays in the read set.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][hashtable]$State,
         [Parameter(Mandatory)]$Window,
         [Parameter(Mandatory)]$Plan,
-        [Parameter(Mandatory)][AllowEmptyCollection()][System.Collections.Generic.List[string]]$Notes
+        [Parameter(Mandatory)][AllowEmptyCollection()][System.Collections.Generic.List[string]]$Failed
     )
 
     try {
@@ -41,6 +41,6 @@ function Read-FlowLogAccount {
         }
     }
     catch {
-        $Notes.Add("Storage account $($Plan.Name) could not be fully read: $($_.Exception.Message)")
+        $Failed.Add($Plan.Name)
     }
 }

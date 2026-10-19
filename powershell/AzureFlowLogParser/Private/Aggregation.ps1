@@ -166,6 +166,44 @@ function Get-FlowLogInputFile {
     }
 }
 
+function Sort-FlowLogRows {
+    # Same order as the .NET aggregator: bytes and flows descending, then the row key in ordinal order.
+    param([object[]]$Rows)
+
+    $list = [System.Collections.Generic.List[object]]::new()
+    $list.AddRange([object[]]@($Rows))
+    $comparison = [System.Comparison[object]]{
+        param($left, $right)
+        $result = ([long]$right.bytes).CompareTo([long]$left.bytes)
+        if ($result -eq 0) { $result = ([long]$right.flows).CompareTo([long]$left.flows) }
+        if ($result -eq 0) { $result = [string]::CompareOrdinal([string]$left.src, [string]$right.src) }
+        if ($result -eq 0) { $result = [string]::CompareOrdinal([string]$left.dst, [string]$right.dst) }
+        if ($result -eq 0) { $result = ([int]$left.dstPort).CompareTo([int]$right.dstPort) }
+        foreach ($name in 'srcScope', 'dstScope', 'proto', 'action', 'direction', 'rule') {
+            if ($result -eq 0) { $result = [string]::CompareOrdinal([string]$left.$name, [string]$right.$name) }
+        }
+        return $result
+    }
+    $list.Sort($comparison)
+    return $list.ToArray()
+}
+
+function Sort-FlowLogScopes {
+    # Scopes sort by kind, then id, both ordinal, as in the .NET report.
+    param([object[]]$Scopes)
+
+    $list = [System.Collections.Generic.List[object]]::new()
+    $list.AddRange([object[]]@($Scopes))
+    $comparison = [System.Comparison[object]]{
+        param($left, $right)
+        $result = [string]::CompareOrdinal([string]$left.kind, [string]$right.kind)
+        if ($result -eq 0) { $result = [string]::CompareOrdinal([string]$left.id, [string]$right.id) }
+        return $result
+    }
+    $list.Sort($comparison)
+    return $list.ToArray()
+}
+
 function Complete-FlowLogModel {
     # Builds the ReportModel (schema 1). $Window null means local data with no time bounds; use observed range.
     [CmdletBinding()]
@@ -176,14 +214,12 @@ function Complete-FlowLogModel {
         $Window,
         [Parameter(Mandatory)]$Filters,
         $Monitoring,
+        [object[]]$Subscriptions = @(),
         [Parameter(Mandatory)][AllowEmptyCollection()][System.Collections.Generic.List[string]]$Notes
     )
 
     $maxRows = 20000
-    $rowsAll = @($State.Rows.Values | Sort-Object -Property @(
-        @{ Expression = { $_.bytes }; Descending = $true },
-        @{ Expression = { $_.flows }; Descending = $true }
-    ))
+    $rowsAll = @(Sort-FlowLogRows -Rows @($State.Rows.Values))
     $rowsTruncated = $rowsAll.Count -gt $maxRows
     $rows = @(foreach ($row in @($rowsAll | Select-Object -First $maxRows)) {
         $first = Format-FlowLogTime -Value $row.first
@@ -224,7 +260,7 @@ function Complete-FlowLogModel {
         $subscriptionCount = $Monitoring.SubscriptionCount
     }
 
-    $scopes = @(foreach ($scope in @($State.Scopes.Values | Sort-Object -Property { $_.id })) {
+    $scopes = @(foreach ($scope in (Sort-FlowLogScopes -Scopes @($State.Scopes.Values))) {
         [pscustomobject]@{
             id             = $scope.id
             kind           = $scope.kind
@@ -235,32 +271,23 @@ function Complete-FlowLogModel {
         }
     })
 
+    # Note text and order follow the .NET report: the counts note first, the caller's notes, then truncation and filters.
     $allNotes = [System.Collections.Generic.List[string]]::new()
-    $allNotes.Add('Counting: each flow-log tuple is one observation, so flows = observations (1 each). Bytes and packets are 0 for version 1 flow logs.')
-    $allNotes.Add("Dedupe: an inbound allowed observation whose source is a storage-backed scope is skipped when that storage account was read in this run, because its outbound record is counted at the source NSG. Skipped: $($State.Skipped).")
-    if ($State.Malformed -gt 0) { $allNotes.Add("Malformed tuples skipped: $($State.Malformed).") }
-    if ($rowsTruncated) {
-        $allNotes.Add("Truncated: $($rowsAll.Count) distinct rows; the top $maxRows by bytes are listed. Summary totals cover all observations.")
-    }
-    if ($Source -eq 'azure') {
-        $allNotes.Add('Mapping: IPv4 longest-prefix match over NIC IPs, subnets and VNets of the selected subscriptions. A flow-log target maps to its storage account. Other VNet space maps to a vnet scope. Unmatched public IPv4 is internet; private or non-IPv4 is unmapped.')
-    }
-    else {
-        if ($null -ne $State.Topology) {
-            $allNotes.Add('Local files with offline topology: longest IPv4 prefix match. Unmatched public IPv4 is internet; private or non-IPv4 is unmapped.')
-        }
-        else {
-            $allNotes.Add('Local files: no ARM topology. Public IPv4 is internet; private or non-IPv4 is unmapped.')
-        }
-        if ($null -eq $Window) { $allNotes.Add('No time filter applied to local files. Use -Since or -Until to filter. Window is the observed range.') }
-    }
-    $allNotes.Add('Port filter matches the destination port. IP filter matches the source or destination address. Min bytes applies per observation.')
+    $allNotes.Add('Counts are flow log observations: one per NSG or VNet flow tuple. A flow crossing two logged networks is observed at both; the duplicate allowed inbound observation is skipped.')
     foreach ($note in $Notes) { $allNotes.Add($note) }
+    if ($rowsTruncated) {
+        $allNotes.Add("Flow rows capped at $($maxRows.ToString('N0', [cultureinfo]::InvariantCulture)) of $($rowsAll.Count.ToString('N0', [cultureinfo]::InvariantCulture)). Totals still include every observation.")
+    }
+    $filtered = $Filters.action -ne 'all' -or $Filters.protocol -ne 'all' -or [bool]$Filters.ports -or [bool]$Filters.ip -or $Filters.minBytes -gt 0
+    if ($filtered) {
+        $allNotes.Add('Filters apply per observation: port matches destination port; IP matches source or destination text.')
+    }
 
     [pscustomobject]@{
         schema       = 1
         generatedUtc = Format-FlowLogTime -Value $GeneratedUtc
         source       = $Source
+        subscriptions = @($Subscriptions)
         window       = [pscustomobject]@{ fromUtc = Format-FlowLogTime -Value $fromUtc; toUtc = Format-FlowLogTime -Value $toUtc }
         filters      = $Filters
         summary      = [pscustomobject]@{

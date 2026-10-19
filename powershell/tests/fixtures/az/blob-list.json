@@ -1,0 +1,28 @@
+[
+  {
+    "container": "insights-logs-flowlogflowevent",
+    "content": null,
+    "deleted": false,
+    "metadata": {},
+    "name": "resourceId=/SUBSCRIPTIONS/00000000-0000-0000-0000-000000000001/RESOURCEGROUPS/RG-APP/PROVIDERS/MICROSOFT.NETWORK/NETWORKSECURITYGROUPS/WEB-NSG/y=2026/m=10/d=19/h=09/m=00/macAddress=001122334455/PT1H.json",
+    "properties": {
+      "blobType": "BlockBlob",
+      "contentLength": 2048,
+      "lastModified": "2026-10-19T09:30:00+00:00"
+    },
+    "snapshot": null
+  },
+  {
+    "container": "insights-logs-flowlogflowevent",
+    "content": null,
+    "deleted": false,
+    "metadata": {},
+    "name": "resourceId=/SUBSCRIPTIONS/00000000-0000-0000-0000-000000000001/RESOURCEGROUPS/RG-APP/PROVIDERS/MICROSOFT.NETWORK/NETWORKSECURITYGROUPS/WEB-NSG/y=2026/m=10/d=19/h=10/m=00/macAddress=001122334455/PT1H.json",
+    "properties": {
+      "blobType": "BlockBlob",
+      "contentLength": 4096,
+      "lastModified": "2026-10-19T10:30:00+00:00"
+    },
+    "snapshot": null
+  }
+]

@@ -25,6 +25,7 @@ BeforeAll {
             schema = 1
             generatedUtc = '2026-10-19T10:05:00Z'
             source = 'azure'
+            subscriptions = @([pscustomobject]@{ subscriptionId = '11111111-1111-1111-1111-111111111111'; displayName = 'Prod (test)'; tenantId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' })
             window = [pscustomobject]@{ fromUtc = '2026-10-18T10:05:00Z'; toUtc = '2026-10-19T10:05:00Z' }
             filters = [pscustomobject]@{ action = 'all'; protocol = 'all'; ports = '443,8000-8100'; ip = ''; minBytes = 0 }
             summary = [pscustomobject]@{
@@ -43,8 +44,8 @@ BeforeAll {
                 [pscustomobject]@{ subscriptionId = '11111111-1111-1111-1111-111111111111'; name = 'stflowb01'; resourceGroup = 'rg-net'; location = 'australiaeast'; kind = 'StorageV2'; skuName = 'Standard_LRS'; flowLogConfigs = 1; containerPresent = $true; hasFlowLogs = $true; status = 'Stale'; latestBlobUtc = '2026-10-19T05:00:00Z'; observedTarget = $null }
             )
             flowLogs = @(
-                [pscustomobject]@{ subscriptionId = '11111111-1111-1111-1111-111111111111'; name = 'fl-a'; storageAccount = 'stflowa01'; networkWatcher = 'nw'; location = 'australiaeast'; target = '/subscriptions/x/resourceGroups/rg-net/providers/Microsoft.Network/networkSecurityGroups/nsg-a'; targetKind = 'NSG'; enabled = $true; retentionDays = 7; trafficAnalytics = $false; status = 'Healthy'; latestBlobUtc = '2026-10-19T09:30:00Z'; ageHours = 0.5; message = '' }
-                [pscustomobject]@{ subscriptionId = '11111111-1111-1111-1111-111111111111'; name = 'fl-b'; storageAccount = 'stflowb01'; networkWatcher = 'nw'; location = 'australiaeast'; target = '/subscriptions/x/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/vnet1'; targetKind = 'VNet'; enabled = $true; retentionDays = 0; trafficAnalytics = $true; status = 'Stale'; latestBlobUtc = '2026-10-19T05:00:00Z'; ageHours = 5.08; message = '' }
+                [pscustomobject]@{ subscriptionId = '11111111-1111-1111-1111-111111111111'; name = 'fl-a'; storageAccount = 'stflowa01'; networkWatcher = 'nw'; location = 'australiaeast'; target = '/subscriptions/x/resourceGroups/rg-net/providers/Microsoft.Network/networkSecurityGroups/nsg-a'; targetKind = 'NSG'; targetName = 'nsg-a'; targetResourceGroup = 'rg-net'; enabled = $true; retentionDays = 7; trafficAnalytics = $false; status = 'Healthy'; latestBlobUtc = '2026-10-19T09:30:00Z'; ageHours = 0.5; message = '' }
+                [pscustomobject]@{ subscriptionId = '11111111-1111-1111-1111-111111111111'; name = 'fl-b'; storageAccount = 'stflowb01'; networkWatcher = 'nw'; location = 'australiaeast'; target = '/subscriptions/x/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/vnet1'; targetKind = 'VNet'; targetName = 'vnet1'; targetResourceGroup = 'rg-net'; enabled = $true; retentionDays = 0; trafficAnalytics = $true; status = 'Stale'; latestBlobUtc = '2026-10-19T05:00:00Z'; ageHours = 5.08; message = '' }
             )
             notes = $Notes
         }
@@ -114,6 +115,18 @@ Describe 'HTML output' {
         $data.summary.flows | Should -Be 6
     }
 
+    It 'embeds the subscriptions and the flow-log target fields' {
+        $path = Join-Path $TestDrive 'fields.html'
+        New-TestModel | Export-FlowLogReport -Format Html -Path $path | Out-Null
+        $match = [regex]::Match([System.IO.File]::ReadAllText($path), '<script id="flowlog-data" type="application/json">(.*?)</script>', 'Singleline')
+        $data = $match.Groups[1].Value.Replace('<\/', '</') | ConvertFrom-Json -DateKind String
+        $data.subscriptions[0].subscriptionId | Should -Be '11111111-1111-1111-1111-111111111111'
+        $data.subscriptions[0].displayName | Should -Be 'Prod (test)'
+        $data.subscriptions[0].tenantId | Should -Be 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+        $data.flowLogs[0].targetName | Should -Be 'nsg-a'
+        $data.flowLogs[0].targetResourceGroup | Should -Be 'rg-net'
+    }
+
     It 'escapes </ inside the embedded JSON so the script element cannot close early' {
         $path = Join-Path $TestDrive 'escaped.html'
         New-TestModel -Notes @('payload </script><b>x</b>') | Export-FlowLogReport -Format Html -Path $path | Out-Null
@@ -170,7 +183,82 @@ Describe 'PDF output structure' {
         Get-FlowLogTraffic -InputPath $script:SamplePath | Export-FlowLogReport -Format Pdf -Path $path | Out-Null
         $text = [System.Text.Encoding]::Latin1.GetString([System.IO.File]::ReadAllBytes($path))
         $text.Contains('No storage accounts with flow logs') | Should -BeTrue
-        $text.Contains('Local files: no ARM topology') | Should -BeTrue
+        $text.Contains("Local input: no Azure topology was loaded. Public addresses are 'internet'") | Should -BeTrue
+        $text.Contains('(Tenant)') | Should -BeTrue
+        $text.Contains('not available \(offline input\)') | Should -BeTrue
+    }
+
+    It 'shows the tenant and subscription rows in the summary' {
+        $path = Join-Path $TestDrive 'identity.pdf'
+        New-TestModel | Export-FlowLogReport -Format Pdf -Path $path | Out-Null
+        $text = [System.Text.Encoding]::Latin1.GetString([System.IO.File]::ReadAllBytes($path))
+        $text.Contains('(aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa)') | Should -BeTrue
+        $text.Contains('(Subscriptions)') | Should -BeTrue
+        $text.Contains('Prod \(test\) \(11111111-1111-1111-1111-111111111111\)') | Should -BeTrue
+        $text.IndexOf('(Tenant)') | Should -BeLessThan $text.IndexOf('(Subscriptions)')
+        $text.IndexOf('(Subscriptions)') | Should -BeLessThan $text.IndexOf('(Flow observations)')
+    }
+
+    It 'writes the .NET summary rows in order, with the same value formats' {
+        $path = Join-Path $TestDrive 'summary-rows.pdf'
+        New-TestModel | Export-FlowLogReport -Format Pdf -Path $path | Out-Null
+        $text = [System.Text.Encoding]::Latin1.GetString([System.IO.File]::ReadAllBytes($path))
+        # New-TestModel: 6 observations, 6 allowed, 0 denied, 10000 bytes, 30 packets, 1 skipped, 4 source and 1 destination IPs.
+        $labels = @(
+            'Tenant', 'Subscriptions', 'Flow observations', 'Allowed / denied', 'Bytes / packets',
+            'Storage accounts read', 'Scopes in report', 'Unique source / destination IPs', 'Allowed inbound duplicates skipped'
+        )
+        $positions = foreach ($label in $labels) { $text.IndexOf("($label)") }
+        $positions | ForEach-Object { $_ | Should -BeGreaterThan -1 }
+        for ($i = 1; $i -lt $positions.Count; $i++) { $positions[$i] | Should -BeGreaterThan $positions[$i - 1] }
+        $text.Contains('(6 / 0)') | Should -BeTrue
+        $text.Contains('(9.8 KB / 30)') | Should -BeTrue
+        $text.Contains('(4 / 1)') | Should -BeTrue
+        $text.Contains('(Flows \(observations\))') | Should -BeFalse
+        $text.Contains('(Flow rows listed') | Should -BeFalse
+        $text.Contains('(Subscriptions scanned)') | Should -BeFalse
+    }
+
+    It 'formats bytes as the .NET report does' {
+        InModuleScope AzureFlowLogReport {
+            Format-PdfBytes -Bytes 512 | Should -Be '512 B'
+            Format-PdfBytes -Bytes 1536 | Should -Be '1.5 KB'
+            Format-PdfBytes -Bytes 1048576 | Should -Be '1.0 MB'
+            Format-PdfBytes -Bytes 15889587 | Should -Be '15.2 MB'
+        }
+    }
+
+    It 'uses the contract headers for the monitoring tables' {
+        $path = Join-Path $TestDrive 'monitoring.pdf'
+        New-TestModel | Export-FlowLogReport -Format Pdf -Path $path | Out-Null
+        $text = [System.Text.Encoding]::Latin1.GetString([System.IO.File]::ReadAllBytes($path))
+        foreach ($header in 'Resource group', 'Latest blob', 'Flow log', 'Target RG', 'Configs', 'Enabled') {
+            $text.Contains("($header)") | Should -BeTrue
+        }
+        # 'Unmanaged source' is wider than its 60 pt column, so it wraps onto two header lines.
+        $text.Contains('(Unmanaged)') | Should -BeTrue
+        $text.Contains('(source)') | Should -BeTrue
+        $text.Contains('(Age)') | Should -BeTrue
+        $text.Contains('(Latest blob \(UTC\))') | Should -BeFalse
+        # The 16-character timestamp is shown whole, as the .NET report does.
+        $text.Contains('(2026-10-19 09:30)') | Should -BeTrue
+        $text.Contains('(nsg-a)') | Should -BeTrue
+        $text.Contains('(rg-net)') | Should -BeTrue
+        $text.Contains('(Prod \(test\))') | Should -BeTrue
+    }
+
+    It 'renders an older model without the subscriptions and target fields' {
+        $path = Join-Path $TestDrive 'older.pdf'
+        $model = New-TestModel
+        $model.PSObject.Properties.Remove('subscriptions')
+        foreach ($flowLog in $model.flowLogs) {
+            $flowLog.PSObject.Properties.Remove('targetName')
+            $flowLog.PSObject.Properties.Remove('targetResourceGroup')
+        }
+        { $model | Export-FlowLogReport -Format Pdf -Path $path } | Should -Not -Throw
+        $text = [System.Text.Encoding]::Latin1.GetString([System.IO.File]::ReadAllBytes($path))
+        $text.Contains('not available \(offline input\)') | Should -BeTrue
+        $text.Contains('(vnet1)') | Should -BeTrue
     }
 }
 

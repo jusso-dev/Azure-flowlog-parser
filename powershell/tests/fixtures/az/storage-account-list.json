@@ -1,0 +1,20 @@
+[
+  {
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/rg-net/providers/Microsoft.Storage/storageAccounts/stflowlogs01",
+    "kind": "StorageV2",
+    "location": "australiaeast",
+    "name": "stflowlogs01",
+    "resourceGroup": "rg-net",
+    "sku": { "name": "Standard_GRS", "tier": "Standard" },
+    "type": "Microsoft.Storage/storageAccounts"
+  },
+  {
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/rg-app/providers/Microsoft.Storage/storageAccounts/stappdata",
+    "kind": "Storage",
+    "location": "eastus",
+    "name": "stappdata",
+    "resourceGroup": "rg-app",
+    "sku": { "name": "Standard_LRS" },
+    "type": "Microsoft.Storage/storageAccounts"
+  }
+]

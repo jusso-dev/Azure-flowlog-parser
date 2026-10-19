@@ -4,6 +4,8 @@ BeforeAll {
     $script:ModulePath = Join-Path $PSScriptRoot '..' 'AzureFlowLogParser' 'AzureFlowLogParser.psd1'
     $script:SamplePath = Join-Path $PSScriptRoot '..' '..' 'sample-flowlog.json'
     Import-Module $script:ModulePath -Force
+    # Safety net: any test that reaches the Azure CLI without its own mock fails here instead of calling az.
+    Mock -ModuleName AzureFlowLogParser Invoke-FlowLogAzCli { throw 'Invoke-FlowLogAzCli was not mocked: no test may call az.' }
 
     $script:Sub = '11111111-1111-1111-1111-111111111111'
     $script:NsgA = "/subscriptions/$($script:Sub)/resourceGroups/rg-net/providers/Microsoft.Network/networkSecurityGroups/nsg-a"
@@ -254,7 +256,8 @@ Describe 'Local tuple parsing (sample-flowlog.json)' {
         '{"records":[{"properties":{"Version":2},"flowRecords":{"flows":[{"rule":"R","flowGroups":[{"flowTuples":["garbage","1705318200,10.0.1.4,8.8.8.8,1,53,U,O,A,,,,,"]}]}]}}]}' | Set-Content -LiteralPath $path
         $model = Get-FlowLogTraffic -InputPath $path
         $model.summary.flows | Should -Be 1
-        ($model.notes -match 'Malformed tuples skipped: 1').Count | Should -Be 1
+        # The .NET report writes no malformed-tuple note, so the PowerShell notes do not either.
+        ($model.notes -match 'alformed').Count | Should -Be 0
     }
 
     It 'rejects -InputPath combined with Azure selectors' {
@@ -300,13 +303,15 @@ Describe 'Health classification and inventory (mocked Az wrappers)' {
             [pscustomobject]@{
                 SubscriptionId = $script:HealthSub; Name = "fl-$Account"; NetworkWatcher = 'NetworkWatcher_australiaeast'; Location = 'australiaeast'
                 Target = "/subscriptions/$($script:HealthSub)/resourceGroups/rg-h/providers/Microsoft.Network/networkSecurityGroups/$Nsg"
-                TargetKind = 'NSG'; Enabled = $Enabled; RetentionDays = 7; TrafficAnalytics = $false
+                TargetKind = 'NSG'; TargetName = $Nsg; TargetResourceGroup = 'rg-h'; Enabled = $Enabled; RetentionDays = 7; TrafficAnalytics = $false
                 StorageAccount = $Account; StorageSubscriptionId = $script:HealthSub; StorageResourceGroup = 'rg-h'
             }
         }
         $script:HealthArm = [pscustomobject]@{
             SubscriptionId    = $script:HealthSub
-            StorageAccounts   = @('stflowhealthy', 'stflowstale', 'stflowdisabled', 'stflowunmanaged', 'stflownone', 'stflowdenied', 'stflowerror') | ForEach-Object { New-HealthAccount -Name $_ }
+            DisplayName       = 'health'
+            TenantId          = '33333333-3333-3333-3333-333333333333'
+            StorageAccounts   =@('stflowhealthy', 'stflowstale', 'stflowdisabled', 'stflowunmanaged', 'stflownone', 'stflowdenied', 'stflowerror') | ForEach-Object { New-HealthAccount -Name $_ }
             FlowLogs          = @(
                 New-HealthConfig -Account 'stflowhealthy' -Nsg 'nsg-h'
                 New-HealthConfig -Account 'stflowstale' -Nsg 'nsg-s'
@@ -417,13 +422,15 @@ Describe 'Azure-mode traffic with dedupe across two storage accounts' {
         $script:TrafficNsgB = "/subscriptions/$($script:TrafficSub)/resourceGroups/rg-net/providers/Microsoft.Network/networkSecurityGroups/nsg-b"
         $script:TrafficArm = [pscustomobject]@{
             SubscriptionId    = $script:TrafficSub
+            DisplayName       = 'traffic'
+            TenantId          = '55555555-5555-5555-5555-555555555555'
             StorageAccounts   = @(
                 [pscustomobject]@{ SubscriptionId = $script:TrafficSub; Name = 'stflowa01'; ResourceGroup = 'rg-net'; Location = 'australiaeast'; Kind = 'StorageV2'; SkuName = 'Standard_LRS' }
                 [pscustomobject]@{ SubscriptionId = $script:TrafficSub; Name = 'stflowb01'; ResourceGroup = 'rg-net'; Location = 'australiaeast'; Kind = 'StorageV2'; SkuName = 'Standard_LRS' }
             )
             FlowLogs          = @(
-                [pscustomobject]@{ SubscriptionId = $script:TrafficSub; Name = 'fl-a'; NetworkWatcher = 'nw'; Location = 'australiaeast'; Target = $script:TrafficNsgA; TargetKind = 'NSG'; Enabled = $true; RetentionDays = 7; TrafficAnalytics = $false; StorageAccount = 'stflowa01'; StorageSubscriptionId = $script:TrafficSub; StorageResourceGroup = 'rg-net' }
-                [pscustomobject]@{ SubscriptionId = $script:TrafficSub; Name = 'fl-b'; NetworkWatcher = 'nw'; Location = 'australiaeast'; Target = $script:TrafficNsgB; TargetKind = 'NSG'; Enabled = $true; RetentionDays = 7; TrafficAnalytics = $false; StorageAccount = 'stflowb01'; StorageSubscriptionId = $script:TrafficSub; StorageResourceGroup = 'rg-net' }
+                [pscustomobject]@{ SubscriptionId = $script:TrafficSub; Name = 'fl-a'; NetworkWatcher = 'nw'; Location = 'australiaeast'; Target = $script:TrafficNsgA; TargetKind = 'NSG'; TargetName = 'nsg-a'; TargetResourceGroup = 'rg-net'; Enabled = $true; RetentionDays = 7; TrafficAnalytics = $false; StorageAccount = 'stflowa01'; StorageSubscriptionId = $script:TrafficSub; StorageResourceGroup = 'rg-net' }
+                [pscustomobject]@{ SubscriptionId = $script:TrafficSub; Name = 'fl-b'; NetworkWatcher = 'nw'; Location = 'australiaeast'; Target = $script:TrafficNsgB; TargetKind = 'NSG'; TargetName = 'nsg-b'; TargetResourceGroup = 'rg-net'; Enabled = $true; RetentionDays = 7; TrafficAnalytics = $false; StorageAccount = 'stflowb01'; StorageSubscriptionId = $script:TrafficSub; StorageResourceGroup = 'rg-net' }
             )
             VirtualNetworks   = @()
             NetworkInterfaces = @(
@@ -484,11 +491,12 @@ Describe 'Azure-mode traffic with dedupe across two storage accounts' {
         $model.summary.storageAccounts | Should -Be 2
     }
 
-    It 'maps flows to storage scopes via the NIC and flags the dedupe in notes' {
+    It 'maps flows to storage scopes via the NIC and leads the notes with the counts note' {
         $model = Get-FlowLogTraffic -SubscriptionId $script:TrafficSub
         $model.flows.srcScope | Should -Contain 'stflowa01'
         $model.flows.dstScope | Should -Contain 'internet'
-        ($model.notes -match 'Skipped: 1').Count | Should -Be 1
+        $model.notes[0] | Should -Match '^Counts are flow log observations: one per NSG or VNet flow tuple\.'
+        $model.summary.observationsSkipped | Should -Be 1
     }
 
     It 'reads only the accounts named by -StorageAccountName' {
@@ -496,6 +504,41 @@ Describe 'Azure-mode traffic with dedupe across two storage accounts' {
         $model.summary.storageAccounts | Should -Be 1
         $model.summary.observationsSkipped | Should -Be 0
         $model.summary.flows | Should -Be 2
+    }
+
+    It 'lists the scanned subscription with its name and tenant, and passes both to the ARM read' {
+        $model = Get-FlowLogTraffic -SubscriptionId $script:TrafficSub
+        @($model.subscriptions).Count | Should -Be 1
+        $model.subscriptions[0].subscriptionId | Should -Be $script:TrafficSub
+        $model.subscriptions[0].displayName | Should -Be 'traffic'
+        $model.subscriptions[0].tenantId | Should -Be '55555555-5555-5555-5555-555555555555'
+        Should -Invoke -CommandName Get-FlowLogAzSubscriptionData -ModuleName AzureFlowLogParser -ParameterFilter {
+            $DisplayName -eq 'traffic' -and $TenantId -eq '55555555-5555-5555-5555-555555555555'
+        } -Times 1 -Exactly
+    }
+
+    It 'keeps a subscription whose ARM read failed, in scan order, and notes the failure' {
+        $failedSub = '66666666-6666-6666-6666-666666666666'
+        Mock -ModuleName AzureFlowLogParser Get-FlowLogAzSubscription {
+            [pscustomobject]@{ Id = $script:TrafficSub; Name = 'traffic'; TenantId = '55555555-5555-5555-5555-555555555555' }
+            [pscustomobject]@{ Id = $failedSub; Name = 'broken'; TenantId = '77777777-7777-7777-7777-777777777777' }
+        }
+        Mock -ModuleName AzureFlowLogParser Get-FlowLogAzSubscriptionData {
+            if ($SubscriptionId -eq $failedSub) { throw 'ARM read failed' }
+            $script:TrafficArm
+        }
+        $model = Get-FlowLogTraffic -SubscriptionId $script:TrafficSub, $failedSub
+        @($model.subscriptions.subscriptionId) | Should -Be @($script:TrafficSub, $failedSub)
+        $model.subscriptions[1].displayName | Should -Be 'broken'
+        $model.subscriptions[1].tenantId | Should -Be '77777777-7777-7777-7777-777777777777'
+        ($model.notes | Where-Object { $_ -eq "Discovery warning: Subscription $failedSub (broken): ARM read failed" }).Count | Should -Be 1
+    }
+
+    It 'carries the flow-log target name and resource group into the report' {
+        $model = Get-FlowLogTraffic -SubscriptionId $script:TrafficSub
+        $nsgA = $model.flowLogs | Where-Object name -eq 'fl-a'
+        $nsgA.targetName | Should -Be 'nsg-a'
+        $nsgA.targetResourceGroup | Should -Be 'rg-net'
     }
 }
 
@@ -583,6 +626,174 @@ Describe 'Observation time fallback' {
         '{"records":[{"properties":{"Version":2},"flowRecords":{"flows":[{"rule":"R","flowGroups":[{"flowTuples":["not-a-time,10.0.1.4,8.8.8.8,1,53,U,O,A,,,,,"]}]}]}}]}' | Set-Content -LiteralPath $path
         $model = Get-FlowLogTraffic -InputPath $path
         $model.summary.flows | Should -Be 0
-        ($model.notes -match 'Malformed tuples skipped: 1').Count | Should -Be 1
+    }
+}
+
+Describe 'Flow-log target name and resource group' {
+    It 'reads <Id> as name <Name> and resource group <Group>' -ForEach @(
+        @{ Id = '/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/rg-net/providers/Microsoft.Network/networkSecurityGroups/nsg-a'; Name = 'nsg-a'; Group = 'rg-net' }
+        @{ Id = '/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/vnet1'; Name = 'vnet1'; Group = 'rg-net' }
+        @{ Id = '/subscriptions/11111111-1111-1111-1111-111111111111/providers/Microsoft.Network/networkSecurityGroups/nsg-x'; Name = 'nsg-x'; Group = '' }
+        @{ Id = '/subscriptions/11111111-1111-1111-1111-111111111111/RESOURCEGROUPS/RG-H/providers/Microsoft.Network/virtualNetworks/vnet-h'; Name = 'vnet-h'; Group = 'RG-H' }
+        @{ Id = ''; Name = ''; Group = '' }
+    ) {
+        InModuleScope AzureFlowLogParser -Parameters @{ Id = $Id; Name = $Name; Group = $Group } {
+            param($Id, $Name, $Group)
+            Get-FlowLogTargetName -TargetId $Id | Should -Be $Name
+            Get-FlowLogTargetResourceGroup -TargetId $Id | Should -Be $Group
+        }
+    }
+
+    It 'fills the config fields from the flow log target id' {
+        InModuleScope AzureFlowLogParser {
+            $flowLog = [pscustomobject]@{
+                Name = 'fl-a'; Location = 'australiaeast'; Enabled = $true
+                TargetResourceId = '/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/rg-net/providers/Microsoft.Network/networkSecurityGroups/nsg-a'
+                StorageId = '/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/rg-net/providers/Microsoft.Storage/storageAccounts/stflowa01'
+            }
+            $config = ConvertTo-FlowLogConfig -FlowLog $flowLog -Watcher ([pscustomobject]@{ Name = 'nw' }) -SubscriptionId '11111111-1111-1111-1111-111111111111'
+            $config.TargetKind | Should -Be 'NSG'
+            $config.TargetName | Should -Be 'nsg-a'
+            $config.TargetResourceGroup | Should -Be 'rg-net'
+        }
+    }
+}
+
+Describe 'Row, scope and note order match the .NET report' {
+    It 'sorts rows by bytes and flows descending, then the key in ordinal order' {
+        InModuleScope AzureFlowLogParser {
+            $row = { param($bytes, $flows, $src, $dst, $port) [pscustomobject]@{ bytes = $bytes; flows = $flows; src = $src; dst = $dst; dstPort = $port; srcScope = 's'; dstScope = 'd'; proto = 'TCP'; action = 'A'; direction = 'O'; rule = 'R' } }
+            $rows = @(
+                & $row 100 1 '10.10.1.9' 'x' 443
+                & $row 100 1 '10.10.1.12' 'x' 443
+                & $row 200 1 'z' 'x' 443
+                & $row 100 2 'a' 'x' 443
+            )
+            (Sort-FlowLogRows -Rows $rows | ForEach-Object { '{0}/{1}/{2}' -f $_.bytes, $_.flows, $_.src }) |
+                Should -Be @('200/1/z', '100/2/a', '100/1/10.10.1.12', '100/1/10.10.1.9')
+        }
+    }
+
+    It 'orders scopes by kind, then id, both ordinal' {
+        InModuleScope AzureFlowLogParser {
+            $scopes = @(
+                @{ id = 'stflowa01'; kind = 'storage' }
+                @{ id = 'Zeta'; kind = 'storage' }
+                @{ id = 'internet'; kind = 'internet' }
+            )
+            (Sort-FlowLogScopes -Scopes $scopes).id | Should -Be @('internet', 'Zeta', 'stflowa01')
+        }
+    }
+
+    It 'writes one owner note per multi-account target, NSG targets first' {
+        InModuleScope AzureFlowLogParser {
+            $nsg = '/subscriptions/s/resourceGroups/rg/providers/Microsoft.Network/networkSecurityGroups/nsg-a'
+            $vnet = '/subscriptions/s/resourceGroups/rg/providers/Microsoft.Network/virtualNetworks/vnet1'
+            $config = { param($target, $kind, $account) [pscustomobject]@{ Target = $target; TargetKind = $kind; StorageAccount = $account; StorageSubscriptionId = 's'; StorageResourceGroup = 'rg' } }
+            $arm = [pscustomobject]@{
+                FlowLogs          = @(
+                    & $config $vnet 'VNet' 'stflowz01'
+                    & $config $vnet 'VNet' 'stflowy01'
+                    & $config $nsg 'NSG' 'stflowb01'
+                    & $config $nsg 'NSG' 'stflowa01'
+                    & $config $nsg 'NSG' 'stflowb01'
+                )
+                VirtualNetworks   = @()
+                NetworkInterfaces = @()
+            }
+            $notes = [System.Collections.Generic.List[string]]::new()
+            New-FlowLogTopology -ArmData @($arm) -Notes $notes | Out-Null
+            $notes | Should -Be @(
+                "NSG $nsg has flow logs to 2 storage accounts; attributed to stflowa01."
+                "VNet $vnet has flow logs to 2 storage accounts; attributed to stflowy01."
+            )
+        }
+    }
+}
+
+Describe 'Filter note' {
+    It 'writes the filter note only when a filter is set' {
+        $unfiltered = Get-FlowLogTraffic -InputPath $script:SamplePath
+        ($unfiltered.notes -match '^Filters apply per observation').Count | Should -Be 0
+        $filtered = Get-FlowLogTraffic -InputPath $script:SamplePath -Action Deny
+        ($filtered.notes -match '^Filters apply per observation').Count | Should -Be 1
+    }
+}
+
+Describe 'Azure subscription data carries the display name and tenant' {
+    It 'returns DisplayName and TenantId beside the inventory and names the subscription in every az call' {
+        Mock -ModuleName AzureFlowLogParser Invoke-FlowLogAzCli { }
+        InModuleScope AzureFlowLogParser {
+            $data = Get-FlowLogAzSubscriptionData -SubscriptionId '11111111-1111-1111-1111-111111111111' -TenantId 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' -DisplayName 'Prod'
+            $data.SubscriptionId | Should -Be '11111111-1111-1111-1111-111111111111'
+            $data.DisplayName | Should -Be 'Prod'
+            $data.TenantId | Should -Be 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+            @($data.StorageAccounts).Count | Should -Be 0
+        }
+        # Storage accounts, watchers, VNets and NICs: four calls, each scoped to the subscription. No watcher means no flow-log call.
+        Should -Invoke -CommandName Invoke-FlowLogAzCli -ModuleName AzureFlowLogParser -Times 4 -Exactly -ParameterFilter {
+            $Arguments -contains '--subscription' -and $Arguments -contains '11111111-1111-1111-1111-111111111111'
+        }
+    }
+}
+
+Describe 'Offline topology subscriptions' {
+    It 'reads subscriptions in file order and ignores unknown keys' {
+        $path = Join-Path $TestDrive 'subs-order.json'
+        @'
+{
+  "version": 2,
+  "networks": [ { "name": "stflowlogs01", "kind": "storage", "prefixes": ["10.10.0.0/16"], "note": "ignored" } ],
+  "subscriptions": [
+    { "subscriptionId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "displayName": "Second alphabetically", "tenantId": "cccccccc-cccc-cccc-cccc-cccccccccccc", "region": "ignored" },
+    { "subscriptionId": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "displayName": "First alphabetically", "tenantId": "cccccccc-cccc-cccc-cccc-cccccccccccc" }
+  ]
+}
+'@ | Set-Content -LiteralPath $path
+        $model = Get-FlowLogTraffic -InputPath (Join-Path $PSScriptRoot 'fixtures' 'topology-tuples.json') -TopologyPath $path
+        @($model.subscriptions.subscriptionId) | Should -Be @('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa')
+        $model.subscriptions[0].displayName | Should -Be 'Second alphabetically'
+        $model.subscriptions[0].tenantId | Should -Be 'cccccccc-cccc-cccc-cccc-cccccccccccc'
+        ($model.subscriptions[0].PSObject.Properties.Name -join ',') | Should -Be 'subscriptionId,displayName,tenantId'
+        $model.scopes.id | Should -Contain 'stflowlogs01'
+    }
+
+    It 'has no subscriptions when the topology file has none' {
+        $model = Get-FlowLogTraffic -InputPath (Join-Path $PSScriptRoot 'fixtures' 'topology-tuples.json') -TopologyPath (Join-Path $PSScriptRoot 'fixtures' 'topology.json')
+        @($model.subscriptions).Count | Should -Be 0
+    }
+
+    It 'has no subscriptions without a topology file' {
+        $model = Get-FlowLogTraffic -InputPath (Join-Path $PSScriptRoot 'fixtures' 'topology-tuples.json')
+        @($model.subscriptions).Count | Should -Be 0
+    }
+
+    It 'skips malformed subscription entries and notes each one' {
+        $path = Join-Path $TestDrive 'subs-malformed.json'
+        @'
+{
+  "networks": [],
+  "subscriptions": [
+    5,
+    { "displayName": "No id" },
+    { "subscriptionId": "   " },
+    null,
+    { "subscriptionId": "dddddddd-dddd-dddd-dddd-dddddddddddd", "displayName": "Kept" }
+  ]
+}
+'@ | Set-Content -LiteralPath $path
+        $model = Get-FlowLogTraffic -InputPath (Join-Path $PSScriptRoot 'fixtures' 'topology-tuples.json') -TopologyPath $path
+        @($model.subscriptions).Count | Should -Be 1
+        $model.subscriptions[0].subscriptionId | Should -Be 'dddddddd-dddd-dddd-dddd-dddddddddddd'
+        $model.subscriptions[0].tenantId | Should -Be ''
+        # Positions are 1-based and count every entry, kept or not.
+        $model.notes | Should -Be @(
+            'Counts are flow log observations: one per NSG or VNet flow tuple. A flow crossing two logged networks is observed at both; the duplicate allowed inbound observation is skipped.'
+            'Offline topology from subs-malformed.json: 0 network(s), 0 prefix(es).'
+            'Topology subscription entry ignored: entry 1 is not an object.'
+            'Topology subscription entry ignored: entry 2 has no subscriptionId.'
+            'Topology subscription entry ignored: entry 3 has no subscriptionId.'
+            'Topology subscription entry ignored: entry 4 is not an object.'
+        )
     }
 }

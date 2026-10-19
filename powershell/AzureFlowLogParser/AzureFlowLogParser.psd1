@@ -30,7 +30,7 @@ CompanyName = 'Unknown'
 Copyright = '(c) Justin Middler. All rights reserved.'
 
 # Description of the functionality provided by this module
-Description = 'Discover, monitor and aggregate Azure VNet flow logs (PT1H.json) from blob storage. Azure mode needs Az modules; -InputPath mode is offline.'
+Description = 'Discover, monitor and aggregate Azure VNet flow logs (PT1H.json) from blob storage. Azure mode calls the Azure CLI (az); -InputPath mode is offline.'
 
 # Minimum version of the PowerShell engine required by this module
 PowerShellVersion = '7.6'

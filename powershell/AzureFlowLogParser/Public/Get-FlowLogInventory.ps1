@@ -4,11 +4,10 @@ function Get-FlowLogInventory {
     Lists storage accounts that receive VNet flow logs, with flow-log config and health status.
 
     .DESCRIPTION
-    Reads subscriptions, storage accounts, network watchers, flow-log configs, VNets and NICs through Az.
-    For each storage account it checks the insights-logs-flowlogflowevent container and, for each flow-log
-    config, the blobs written in the last two UTC days. Accounts without a config are checked for blobs
-    (Unmanaged). Requires Az.Accounts, Az.Storage and Az.Network and an authenticated Az context
-    (Connect-AzAccount).
+    Reads subscriptions, storage accounts, network watchers, flow-log configs, VNets and NICs through the
+    Azure CLI (az). For each storage account it checks the insights-logs-flowlogflowevent container and, for
+    each flow-log config, the blobs written in the last two UTC days. Accounts without a config are checked
+    for blobs (Unmanaged). Requires az on PATH and a signed-in session (az login).
 
     .PARAMETER SubscriptionId
     Subscription ids to inspect. Defaults to every enabled subscription visible to the identity.

@@ -6,15 +6,19 @@ function Format-PdfCount {
     return ([long]$Value).ToString('N0', [cultureinfo]::InvariantCulture)
 }
 
-function Get-PdfTimeAgeText {
-    # Hours between a UTC ISO timestamp and the report time, or '-' when there is no blob.
-    param($Latest, [string]$Generated)
+function Format-PdfBytes {
+    # Same as the .NET report: whole bytes below 1 KB, otherwise one decimal in KB, MB, GB or TB.
+    param([long]$Bytes)
 
-    if ($null -eq $Latest) { return '-' }
-    $styles = [System.Globalization.DateTimeStyles]::AssumeUniversal -bor [System.Globalization.DateTimeStyles]::AdjustToUniversal
-    $latestUtc = [datetime]::Parse([string]$Latest, [cultureinfo]::InvariantCulture, $styles)
-    $generatedUtc = [datetime]::Parse($Generated, [cultureinfo]::InvariantCulture, $styles)
-    return [math]::Round(($generatedUtc - $latestUtc).TotalHours, 2).ToString('0.00', [cultureinfo]::InvariantCulture)
+    $units = 'B', 'KB', 'MB', 'GB', 'TB'
+    $value = [double]$Bytes
+    $unit = 0
+    while ($value -ge 1024 -and $unit -lt $units.Count - 1) {
+        $value /= 1024
+        $unit++
+    }
+    if ($unit -eq 0) { return "$(Format-PdfCount $Bytes) B" }
+    return '{0} {1}' -f $value.ToString('0.0', [cultureinfo]::InvariantCulture), $units[$unit]
 }
 
 function Get-PdfShortName {
@@ -63,19 +67,42 @@ function Get-PdfCellX {
     return $CellStart + 4
 }
 
+function Get-PdfHeaderLines {
+    # A header too wide for its column wraps once at a space. The second line is truncated if it is still too wide.
+    param([string]$Text, [double]$Width)
+
+    $maxChars = [math]::Floor($Width / (8 * 0.6))
+    if ($Text.Length -le $maxChars) { return [pscustomobject]@{ First = $Text; Second = '' } }
+    $cut = $Text.LastIndexOf(' ', [math]::Min($maxChars, $Text.Length - 1))
+    if ($cut -le 0) { return [pscustomobject]@{ First = (Get-PdfFittedText -Text $Text -Width $Width -Size 8 -Bold); Second = '' } }
+    return [pscustomobject]@{
+        First  = $Text.Substring(0, $cut)
+        Second = Get-PdfFittedText -Text $Text.Substring($cut + 1) -Width $Width -Size 8 -Bold
+    }
+}
+
 function Write-PdfTableHeader {
     param($Doc, [object[]]$Columns, [double]$TableWidth)
 
+    # Header text may use the column less 4 pt, so the contract widths hold one line for every short header.
+    $headers =@(foreach ($column in $Columns) { Get-PdfHeaderLines -Text (ConvertTo-PdfAscii -Text $column.Header) -Width ($column.Width - 4) })
+    $height = if (@($headers | Where-Object { $_.Second }).Count -gt 0) { 24 } else { 14 }
     $top = $Doc.Y
-    Add-PdfRect -Doc $Doc -X 40 -Top $top -Width $TableWidth -Height 14 -Color '#1F2937'
+    Add-PdfRect -Doc $Doc -X 40 -Top $top -Width $TableWidth -Height $height -Color '#1F2937'
     $cursor = [double]40
-    foreach ($column in $Columns) {
-        $text = Get-PdfFittedText -Text (ConvertTo-PdfAscii -Text $column.Header) -Width ($column.Width - 8) -Size 8 -Bold
-        $x = Get-PdfCellX -CellStart $cursor -Column $column -Text $text -Size 8 -Bold
-        Add-PdfText -Doc $Doc -X $x -Baseline ($top + 10) -Text $text -Size 8 -Bold -Color '#FFFFFF'
+    for ($c = 0; $c -lt $Columns.Count; $c++) {
+        $column = $Columns[$c]
+        $header = $headers[$c]
+        $firstBaseline = if ($header.Second) { $top + 10 } else { $top + $height / 2 + 3 }
+        $x = Get-PdfCellX -CellStart $cursor -Column $column -Text $header.First -Size 8 -Bold
+        Add-PdfText -Doc $Doc -X $x -Baseline $firstBaseline -Text $header.First -Size 8 -Bold -Color '#FFFFFF'
+        if ($header.Second) {
+            $x = Get-PdfCellX -CellStart $cursor -Column $column -Text $header.Second -Size 8 -Bold
+            Add-PdfText -Doc $Doc -X $x -Baseline ($top + 20) -Text $header.Second -Size 8 -Bold -Color '#FFFFFF'
+        }
         $cursor += $column.Width
     }
-    $Doc.Y += 14
+    $Doc.Y += $height
 }
 
 function Write-PdfTable {
@@ -107,7 +134,8 @@ function Write-PdfTable {
         for ($c = 0; $c -lt $Columns.Count; $c++) {
             $column = $Columns[$c]
             $cell = if ($c -lt $row.Cells.Count) { [string]$row.Cells[$c] } else { '' }
-            $text = Get-PdfFittedText -Text (ConvertTo-PdfAscii -Text $cell) -Width ($column.Width - 8) -Size 8
+            # Body text gets the column less 4 pt, the same allowance as headers, so a 16-character timestamp fits 75 pt.
+            $text = Get-PdfFittedText -Text (ConvertTo-PdfAscii -Text $cell) -Width ($column.Width - 4) -Size 8
             $x = Get-PdfCellX -CellStart $starts[$c] -Column $column -Text $text -Size 8
             Add-PdfText -Doc $Doc -X $x -Baseline ($top + 10) -Text $text -Size 8
         }
@@ -205,29 +233,33 @@ function New-FlowLogPdf {
     $ipText = if ($Model.filters.ip) { $Model.filters.ip } else { '-' }
     Write-PdfParagraph -Doc $doc -Text "Filters: action $($Model.filters.action), protocol $($Model.filters.protocol), ports $portText, ip $ipText, min bytes $($Model.filters.minBytes)."
 
+    $subscriptions = @(Get-PdfOptionalValue -Object $Model -Name 'subscriptions' | Where-Object { $null -ne $_ })
+    $tenantIds = @($subscriptions | ForEach-Object { $_.tenantId } | Where-Object { $_ } | Select-Object -Unique)
+    $tenantText = if ($tenantIds.Count -gt 0) { $tenantIds -join ', ' } else { 'not available (offline input)' }
+    $subscriptionText = if ($subscriptions.Count -gt 0) {
+        (@($subscriptions | ForEach-Object { if ($_.displayName) { "$($_.displayName) ($($_.subscriptionId))" } else { [string]$_.subscriptionId } })) -join '; '
+    }
+    else { 'not available (offline input)' }
+
     Write-PdfHeading -Doc $doc -Text 'Summary'
+    # Same rows, order, labels and formats as the .NET report's summary.
     $metrics = @(
-        @('Flows (observations)', (Format-PdfCount $summary.flows)),
-        @('Allowed', (Format-PdfCount $summary.allowed)),
-        @('Denied', (Format-PdfCount $summary.denied)),
-        @('Bytes', (Format-PdfCount $summary.bytes)),
-        @('Packets', (Format-PdfCount $summary.packets)),
-        @('Storage accounts', (Format-PdfCount $summary.storageAccounts)),
-        @('Scopes', (Format-PdfCount $summary.scopes)),
-        @('Subscriptions', (Format-PdfCount $summary.subscriptions)),
-        @('Unique source IPs', (Format-PdfCount $summary.uniqueSourceIps)),
-        @('Unique destination IPs', (Format-PdfCount $summary.uniqueDestinationIps)),
-        @('Skipped (dedupe)', (Format-PdfCount $summary.observationsSkipped)),
-        @('Flow rows listed / total', "$(Format-PdfCount $summary.rows) / $(Format-PdfCount $summary.rowsTotal)")
+        @('Tenant', $tenantText),
+        @('Subscriptions', $subscriptionText),
+        @('Flow observations', (Format-PdfCount $summary.flows)),
+        @('Allowed / denied', "$(Format-PdfCount $summary.allowed) / $(Format-PdfCount $summary.denied)"),
+        @('Bytes / packets', "$(Format-PdfBytes $summary.bytes) / $(Format-PdfCount $summary.packets)"),
+        @('Storage accounts read', (Format-PdfCount $summary.storageAccounts)),
+        @('Scopes in report', (Format-PdfCount $summary.scopes)),
+        @('Unique source / destination IPs', "$(Format-PdfCount $summary.uniqueSourceIps) / $(Format-PdfCount $summary.uniqueDestinationIps)"),
+        @('Allowed inbound duplicates skipped', (Format-PdfCount $summary.observationsSkipped))
     )
-    $summaryRows = for ($i = 0; $i -lt $metrics.Count; $i += 2) {
-        @{ Cells = @($metrics[$i][0], $metrics[$i][1], $metrics[$i + 1][0], $metrics[$i + 1][1]); Bars = @() }
+    $summaryRows = foreach ($metric in $metrics) {
+        @{ Cells = @($metric[0], $metric[1]); Bars = @() }
     }
     $summaryColumns = @(
-        @{ Header = 'Metric'; Width = 130; Align = 'L' },
-        @{ Header = 'Value'; Width = 127; Align = 'R' },
-        @{ Header = 'Metric'; Width = 130; Align = 'L' },
-        @{ Header = 'Value'; Width = 128; Align = 'R' }
+        @{ Header = 'Measure'; Width = 170; Align = 'L' },
+        @{ Header = 'Value'; Width = 345; Align = 'L' }
     )
     Write-PdfTable -Doc $doc -Columns $summaryColumns -Rows @($summaryRows)
 
@@ -237,16 +269,18 @@ function New-FlowLogPdf {
     }
     else {
         $accountRows = foreach ($account in $Model.accounts) {
-            @{ Cells = @($account.name, $account.subscriptionId, $account.status, $account.flowLogConfigs,
-                    (Format-PdfOptionalText -Value $account.latestBlobUtc), (Get-PdfTimeAgeText -Latest $account.latestBlobUtc -Generated $Model.generatedUtc)); Bars = @() }
+            $resourceGroup = if ($account.resourceGroup) { [string]$account.resourceGroup } else { '-' }
+            @{ Cells = @($account.name, $resourceGroup, (Get-PdfSubscriptionName -Subscriptions $subscriptions -SubscriptionId $account.subscriptionId),
+                    $account.status, $account.flowLogConfigs, (Format-PdfShortTime -Value $account.latestBlobUtc), (Get-PdfShortName -Id $account.observedTarget)); Bars = @() }
         }
         $accountColumns = @(
-            @{ Header = 'Storage account'; Width = 110; Align = 'L' },
-            @{ Header = 'Subscription'; Width = 105; Align = 'L' },
-            @{ Header = 'Status'; Width = 70; Align = 'L' },
-            @{ Header = 'Configs'; Width = 50; Align = 'R' },
-            @{ Header = 'Latest blob (UTC)'; Width = 110; Align = 'L' },
-            @{ Header = 'Age (h)'; Width = 70; Align = 'R' }
+            @{ Header = 'Storage account'; Width = 88; Align = 'L' },
+            @{ Header = 'Resource group'; Width = 84; Align = 'L' },
+            @{ Header = 'Subscription'; Width = 110; Align = 'L' },
+            @{ Header = 'Status'; Width = 60; Align = 'L' },
+            @{ Header = 'Configs'; Width = 38; Align = 'R' },
+            @{ Header = 'Latest blob'; Width = 75; Align = 'L' },
+            @{ Header = 'Unmanaged source'; Width = 60; Align = 'L' }
         )
         Write-PdfTable -Doc $doc -Columns $accountColumns -Rows @($accountRows)
     }
@@ -257,17 +291,24 @@ function New-FlowLogPdf {
     }
     else {
         $flowLogRows = foreach ($flowLog in $Model.flowLogs) {
-            @{ Cells = @($flowLog.storageAccount, $flowLog.targetKind, (Get-PdfShortName -Id $flowLog.target), $(if ($flowLog.enabled) { 'yes' } else { 'no' }),
-                    $flowLog.status, (Format-PdfOptionalText -Value $flowLog.latestBlobUtc), (Format-PdfAgeValue -Value $flowLog.ageHours)); Bars = @() }
+            # Models from before targetName and targetResourceGroup existed fall back to the target id.
+            $targetName = [string](Get-PdfOptionalValue -Object $flowLog -Name 'targetName')
+            if (-not $targetName) { $targetName = Get-PdfShortName -Id $flowLog.target }
+            $targetResourceGroup = [string](Get-PdfOptionalValue -Object $flowLog -Name 'targetResourceGroup')
+            if (-not $targetResourceGroup) { $targetResourceGroup = '-' }
+            $flowLogName = if ($flowLog.name) { [string]$flowLog.name } else { '-' }
+            @{ Cells = @($flowLog.storageAccount, $flowLogName, $targetName, $targetResourceGroup, $flowLog.targetKind,
+                    $(if ($flowLog.enabled) { 'yes' } else { 'no' }), $flowLog.status, (Format-PdfAgeValue -Value $flowLog.ageHours)); Bars = @() }
         }
         $flowLogColumns = @(
-            @{ Header = 'Storage account'; Width = 95; Align = 'L' },
-            @{ Header = 'Kind'; Width = 40; Align = 'L' },
-            @{ Header = 'Target'; Width = 140; Align = 'L' },
-            @{ Header = 'Enabled'; Width = 40; Align = 'L' },
-            @{ Header = 'Status'; Width = 65; Align = 'L' },
-            @{ Header = 'Latest blob (UTC)'; Width = 95; Align = 'L' },
-            @{ Header = 'Age (h)'; Width = 40; Align = 'R' }
+            @{ Header = 'Storage account'; Width = 78; Align = 'L' },
+            @{ Header = 'Flow log'; Width = 92; Align = 'L' },
+            @{ Header = 'Target'; Width = 88; Align = 'L' },
+            @{ Header = 'Target RG'; Width = 92; Align = 'L' },
+            @{ Header = 'Kind'; Width = 34; Align = 'L' },
+            @{ Header = 'Enabled'; Width = 38; Align = 'L' },
+            @{ Header = 'Status'; Width = 58; Align = 'L' },
+            @{ Header = 'Age'; Width = 35; Align = 'R' }
         )
         Write-PdfTable -Doc $doc -Columns $flowLogColumns -Rows @($flowLogRows)
     }
@@ -361,11 +402,32 @@ function New-FlowLogPdf {
     return ConvertTo-PdfByteArray -ContentStreams $doc.Pages.ToArray()
 }
 
-function Format-PdfOptionalText {
+function Get-PdfOptionalValue {
+    # Property read that yields $null when the object lacks it, so older JSON still renders under strict mode.
+    param($Object, [string]$Name)
+
+    $property = $Object.PSObject.Properties[$Name]
+    if ($null -eq $property) { return $null }
+    return $property.Value
+}
+
+function Get-PdfSubscriptionName {
+    # Display name for a subscription id, or the id when the report has no name for it.
+    param($Subscriptions, [string]$SubscriptionId)
+
+    $found = $Subscriptions | Where-Object { $_.subscriptionId -eq $SubscriptionId } | Select-Object -First 1
+    if ($null -ne $found -and $found.displayName) { return [string]$found.displayName }
+    return $SubscriptionId
+}
+
+function Format-PdfShortTime {
+    # 'yyyy-MM-dd HH:mm' from a UTC ISO timestamp, as the .NET report writes it. '-' when there is no blob.
     param($Value)
 
     if ($null -eq $Value) { return '-' }
-    return [string]$Value
+    $text = [string]$Value
+    if ($text.Length -lt 16) { return $text }
+    return $text.Substring(0, 16).Replace('T', ' ')
 }
 
 function Format-PdfAgeValue {

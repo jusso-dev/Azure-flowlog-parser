@@ -69,36 +69,30 @@ function Get-FlowLogMonitoring {
         [datetime]$NowUtc
     )
 
-    $notes = [System.Collections.Generic.List[string]]::new()
+    $topologyNotes = [System.Collections.Generic.List[string]]::new()
+    $warnings = [System.Collections.Generic.List[string]]::new()
     $subscriptions = @(Get-FlowLogAzSubscription -SubscriptionId $SubscriptionId)
     if ($subscriptions.Count -eq 0) {
-        throw 'No enabled subscriptions are visible to the current identity. Run Connect-AzAccount or pass -SubscriptionId.'
+        throw 'No enabled subscriptions are visible to the current identity. Run az login or pass -SubscriptionId.'
     }
 
     $armData = [System.Collections.Generic.List[object]]::new()
     foreach ($subscription in $subscriptions) {
         try {
-            $armData.Add((Get-FlowLogAzSubscriptionData -SubscriptionId $subscription.Id -TenantId $subscription.TenantId))
+            $armData.Add((Get-FlowLogAzSubscriptionData -SubscriptionId $subscription.Id -TenantId $subscription.TenantId -DisplayName $subscription.Name))
         }
         catch {
-            $notes.Add("Subscription $($subscription.Id) could not be read: $($_.Exception.Message)")
+            # Same label shape as the .NET discovery warning: the id, then the display name in brackets when there is one.
+            $label = if ([string]::IsNullOrEmpty($subscription.Name)) { $subscription.Id } else { "$($subscription.Id) ($($subscription.Name))" }
+            $warnings.Add("Subscription ${label}: $($_.Exception.Message)")
         }
     }
-    $topology = New-FlowLogTopology -ArmData $armData.ToArray() -Notes $notes
+    $topology = New-FlowLogTopology -ArmData $armData.ToArray() -Notes $topologyNotes
 
     $wanted = @($StorageAccountName | Where-Object { $_ })
     $allAccounts = @($armData | ForEach-Object { $_.StorageAccounts })
     $candidates = @($allAccounts | Where-Object { $wanted.Count -eq 0 -or ($wanted -contains $_.Name) })
     $allConfigs = @($armData | ForEach-Object { $_.FlowLogs })
-
-    if ($wanted.Count -eq 0) {
-        $accountNames = @($allAccounts | ForEach-Object { $_.Name })
-        foreach ($config in $allConfigs) {
-            if ($accountNames -notcontains $config.StorageAccount) {
-                $notes.Add("Flow log $($config.Name) writes to storage account $($config.StorageAccount), which is outside the selected subscriptions. It is not checked.")
-            }
-        }
-    }
 
     $accounts = [System.Collections.Generic.List[object]]::new()
     $flowLogs = [System.Collections.Generic.List[object]]::new()
@@ -133,20 +127,22 @@ function Get-FlowLogMonitoring {
                 $latest = $health.LatestBlobUtc
             }
             $configResults.Add([pscustomobject]@{
-                subscriptionId = $config.SubscriptionId
-                name           = $config.Name
-                storageAccount = $config.StorageAccount
-                networkWatcher = $config.NetworkWatcher
-                location       = $config.Location
-                target         = $config.Target
-                targetKind     = $config.TargetKind
-                enabled        = $config.Enabled
-                retentionDays  = $config.RetentionDays
-                trafficAnalytics = $config.TrafficAnalytics
-                status         = $health.Status
-                latestBlobUtc  = Format-FlowLogOptionalTime -Value $health.LatestBlobUtc
-                ageHours       = $health.AgeHours
-                message        = $health.Message
+                subscriptionId      = $config.SubscriptionId
+                name                = $config.Name
+                storageAccount      = $config.StorageAccount
+                networkWatcher      = $config.NetworkWatcher
+                location            = $config.Location
+                target              = $config.Target
+                targetKind          = $config.TargetKind
+                targetName          = $config.TargetName
+                targetResourceGroup = $config.TargetResourceGroup
+                enabled             = $config.Enabled
+                retentionDays       = $config.RetentionDays
+                trafficAnalytics    = $config.TrafficAnalytics
+                status              = $health.Status
+                latestBlobUtc       = Format-FlowLogOptionalTime -Value $health.LatestBlobUtc
+                ageHours            = $health.AgeHours
+                message             = $health.Message
             })
         }
 
@@ -203,12 +199,20 @@ function Get-FlowLogMonitoring {
         }
     }
 
+    # Every subscription in the scan, in scan order. A failed ARM read keeps its entry; its note is above.
+    $scanned = @($subscriptions | ForEach-Object {
+        [pscustomobject]@{ subscriptionId = [string]$_.Id; displayName = [string]$_.Name; tenantId = [string]$_.TenantId }
+    })
+
     [pscustomobject]@{
         SubscriptionCount = $armData.Count
+        Subscriptions     = $scanned
         Topology          = $topology
         Accounts          = $accounts.ToArray()
         FlowLogs          = $flowLogs.ToArray()
         ReadPlan          = $readPlan.ToArray()
-        Notes             = $notes
+        TopologyNotes     = $topologyNotes.ToArray()
+        Warnings          = $warnings.ToArray()
+        Notes             = @($topologyNotes) + @($warnings)
     }
 }

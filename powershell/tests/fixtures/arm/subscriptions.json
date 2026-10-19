@@ -1,0 +1,21 @@
+{
+  "value": [
+    {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000001",
+      "authorizationSource": "RoleBased",
+      "managedByTenants": [],
+      "subscriptionId": "00000000-0000-0000-0000-000000000001",
+      "tenantId": "11111111-1111-1111-1111-111111111111",
+      "displayName": "Prod Network",
+      "state": "Enabled",
+      "subscriptionPolicies": { "locationPlacementId": "Public_2014-09-01", "quotaId": "PayAsYouGo_2014-09-01", "spendingLimit": "Off" }
+    },
+    {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000002",
+      "subscriptionId": "00000000-0000-0000-0000-000000000002",
+      "displayName": "Retired",
+      "state": "Disabled"
+    }
+  ],
+  "nextLink": "https://management.azure.com/subscriptions?api-version=2022-12-01&$skiptoken=page2"
+}

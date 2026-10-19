@@ -1,0 +1,34 @@
+[
+  {
+    "enabled": true,
+    "flowAnalyticsConfiguration": {
+      "networkWatcherFlowAnalyticsConfiguration": { "enabled": true, "trafficAnalyticsInterval": 60 }
+    },
+    "format": { "type": "JSON", "version": 2 },
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/NetworkWatcherRG/providers/Microsoft.Network/networkWatchers/NetworkWatcher_australiaeast/FlowLogs/flowlog-web-nsg",
+    "location": "australiaeast",
+    "name": "flowlog-web-nsg",
+    "provisioningState": "Succeeded",
+    "resourceGroup": "NetworkWatcherRG",
+    "retentionPolicy": { "days": 30, "enabled": true },
+    "storageId": "/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/rg-net/providers/Microsoft.Storage/storageAccounts/stflowlogs01",
+    "targetResourceGuid": "00000000-0000-0000-0000-000000000003",
+    "targetResourceId": "/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/rg-app/providers/Microsoft.Network/networkSecurityGroups/web-nsg",
+    "type": "Microsoft.Network/networkWatchers/FlowLogs"
+  },
+  {
+    "enabled": false,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/NetworkWatcherRG/providers/Microsoft.Network/networkWatchers/NetworkWatcher_australiaeast/FlowLogs/flowlog-vnet-off",
+    "location": "australiaeast",
+    "name": "flowlog-vnet-off",
+    "storageId": "/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/rg-net/providers/Microsoft.Storage/storageAccounts/stflowlogs01",
+    "targetResourceId": "/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/hub-vnet"
+  },
+  {
+    "enabled": true,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/NetworkWatcherRG/providers/Microsoft.Network/networkWatchers/NetworkWatcher_australiaeast/FlowLogs/flowlog-without-target",
+    "location": "australiaeast",
+    "name": "flowlog-without-target",
+    "storageId": "/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/rg-net/providers/Microsoft.Storage/storageAccounts/stflowlogs01"
+  }
+]

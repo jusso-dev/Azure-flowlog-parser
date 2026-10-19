@@ -1,0 +1,39 @@
+{
+  "value": [
+    {
+      "name": "flowlog-web-nsg",
+      "type": "Microsoft.Network/networkWatchers/FlowLogs",
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/NetworkWatcherRG/providers/Microsoft.Network/networkWatchers/NetworkWatcher_australiaeast/FlowLogs/flowlog-web-nsg",
+      "location": "australiaeast",
+      "properties": {
+        "format": { "type": "JSON", "version": 2 },
+        "enabled": true,
+        "flowAnalyticsConfiguration": {
+          "networkWatcherFlowAnalyticsConfiguration": { "enabled": true, "trafficAnalyticsInterval": 60 }
+        },
+        "provisioningState": "Succeeded",
+        "retentionPolicy": { "days": 30, "enabled": true },
+        "storageId": "/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/rg-net/providers/Microsoft.Storage/storageAccounts/stflowlogs01",
+        "targetResourceGuid": "00000000-0000-0000-0000-000000000003",
+        "targetResourceId": "/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/rg-app/providers/Microsoft.Network/networkSecurityGroups/web-nsg"
+      }
+    },
+    {
+      "name": "flowlog-vnet-off",
+      "location": "australiaeast",
+      "properties": {
+        "enabled": false,
+        "storageId": "/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/rg-net/providers/Microsoft.Storage/storageAccounts/stflowlogs01",
+        "targetResourceId": "/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/hub-vnet"
+      }
+    },
+    {
+      "name": "flowlog-without-target",
+      "location": "australiaeast",
+      "properties": {
+        "enabled": true,
+        "storageId": "/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/rg-net/providers/Microsoft.Storage/storageAccounts/stflowlogs01"
+      }
+    }
+  ]
+}

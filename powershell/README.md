@@ -9,15 +9,13 @@ The shared rules (parsing, topology, dedupe, health, report contents) are in the
 
 ## Install
 
-Azure mode needs the Az modules at these minimum versions. Offline `-InputPath` mode needs none of them.
+Azure mode calls the Azure CLI (`az`), not the Az PowerShell modules. Install `az` (tested with 2.73.0) and make sure it is on `PATH`. Then sign in:
 
 ```powershell
-Install-Module Az.Accounts -MinimumVersion 5.5.3 -Scope CurrentUser
-Install-Module Az.Storage -MinimumVersion 9.7.2 -Scope CurrentUser
-Install-Module Az.Network -MinimumVersion 8.3.0 -Scope CurrentUser
-
-Connect-AzAccount   # Entra ID sign-in; storage reads use your connected account (RBAC on each account)
+az login   # Entra ID sign-in; storage reads use your signed-in identity (RBAC on each account, --auth-mode login)
 ```
+
+Offline `-InputPath` mode needs none of this.
 
 Import from the repository:
 
@@ -26,7 +24,7 @@ Import-Module ./powershell/AzureFlowLogParser
 Import-Module ./powershell/AzureFlowLogReport
 ```
 
-Each Az module loads on the first Azure call, not on import, so the offline examples work without Az installed.
+Nothing is checked on import. The first Azure call fails with a clear message if `az` is not on `PATH`, so the offline examples work without it.
 
 ## Usage
 
@@ -76,11 +74,16 @@ Get-FlowLogTraffic -InputPath ./logs -TopologyPath ./topology.json | Export-Flow
   "networks": [
     { "name": "stflowlogs01", "kind": "storage", "prefixes": ["10.10.0.0/16", "10.10.5.4/32"] },
     { "name": "vnet-spoke", "kind": "vnet", "prefixes": ["10.10.5.0/24"] }
+  ],
+  "subscriptions": [
+    { "subscriptionId": "00000000-0000-0000-0000-000000000001", "displayName": "Example Production", "tenantId": "11111111-2222-3333-4444-555555555555" }
   ]
 }
 ```
 
 Addresses map by longest IPv4 prefix, as in Azure mode. A `storage` network becomes a storage scope named after the account, and its name also seeds the dedupe read set, so duplicate inbound records are dropped. A `vnet` network becomes scope `vnet:<name>`. Non-IPv4 prefixes are skipped and counted in the topology note. `-TopologyPath` is ignored, with a warning, unless `-InputPath` is also given.
+
+The optional `subscriptions` array fills the report's Tenant and Subscriptions rows, in file order. Each entry needs a `subscriptionId`; `displayName` and `tenantId` are optional. An entry that is not an object or has no subscription id is skipped with a topology note. Other keys are ignored. Without the array, those rows read "not available (offline input)".
 
 ### Report
 
@@ -120,13 +123,13 @@ Timestamps in the model are ISO-8601 strings. PowerShell 7.6's `ConvertFrom-Json
 - Flow-log configs that write to storage in an unselected subscription are not checked and are noted.
 - Health uses a 2-day lookback. Reports read only the requested window.
 - Accounts with no flow-log configs are listed only if they hold flow-log blobs. An account whose container cannot be read (AccessDenied) is listed by default with that status. `-IncludeAll` also lists accounts with no flow logs (NoFlowLogs).
-- Azure mode is covered by mocked tests and by `tests/AzureTypes.Tests.ps1`, which runs the Az wrappers' property reads against the real Az types (Az.Accounts 5.5.3, Az.Network 8.3.0, Az.Storage 9.7.2, as checked against the Microsoft Learn reference). That test skips unless those modules are installed. No live subscription has been called, so run a real `discover` before relying on Azure mode.
+- Azure mode is covered by mocked tests. `tests/AzureCliOutput.Tests.ps1` checks the parsing against az-shaped fixtures in `tests/fixtures/az/` (cross-checked against the ARM originals in `tests/fixtures/arm/`), and runs the wrapper against a test double named `az`. The az field names and output shapes are unverified against live output: no live Azure call has been made, so run a real `discover` before relying on Azure mode. Multi-tenant access depends on `az login` having a session for each tenant. Blob listings use `--num-results=*`; the `=` form matters because PowerShell expands a bare `*` against the working directory.
 - The PDF top-flows table omits the `rule` column to fit the page; the model still carries it.
 - The model lists at most 20,000 flow rows (`summary.rowsTruncated`). Summary totals cover every observation. Per-storage-account figures in the report are computed from the listed rows.
 
 ## Tests
 
-Pester 5 (5.9.1 tested). Azure is never called: the Az wrappers are mocked. `tests/AzureTypes.Tests.ps1` loads the real Az modules when they are installed and skips otherwise.
+Pester 5 (5.9.1 tested). Azure is never called: `Invoke-FlowLogAzCli` is mocked, and the wrapper tests use a test double named `az` placed first on `PATH`. A test that reaches the CLI without a mock fails rather than calling `az`.
 
 ```powershell
 Install-Module Pester -MaximumVersion 5.99.99 -Scope CurrentUser

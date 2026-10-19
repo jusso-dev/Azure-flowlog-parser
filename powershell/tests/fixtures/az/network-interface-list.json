@@ -1,0 +1,28 @@
+[
+  {
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/rg-app/providers/Microsoft.Network/networkInterfaces/web-vm-nic",
+    "ipConfigurations": [
+      {
+        "name": "ipconfig1",
+        "primary": true,
+        "privateIpAddress": "10.10.1.4",
+        "privateIpAddressVersion": "IPv4"
+      }
+    ],
+    "location": "australiaeast",
+    "name": "web-vm-nic",
+    "networkSecurityGroup": {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/rg-app/providers/Microsoft.Network/networkSecurityGroups/web-nsg"
+    },
+    "primary": true,
+    "resourceGroup": "rg-app"
+  },
+  {
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/rg-app/providers/Microsoft.Network/networkInterfaces/bare-nic",
+    "ipConfigurations": [
+      { "name": "ipconfig1" }
+    ],
+    "name": "bare-nic",
+    "resourceGroup": "rg-app"
+  }
+]

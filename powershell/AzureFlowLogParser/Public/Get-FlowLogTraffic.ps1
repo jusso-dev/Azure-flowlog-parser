@@ -23,8 +23,9 @@ function Get-FlowLogTraffic {
 
     .PARAMETER TopologyPath
     Offline topology JSON for -InputPath runs: { "networks": [ { "name", "kind": "storage" | "vnet", "prefixes": [...] } ] }.
-    Flows map to scopes by longest IPv4 prefix. Storage networks also seed the dedupe read set. Ignored
-    without -InputPath (a warning is written).
+    Flows map to scopes by longest IPv4 prefix. Storage networks also seed the dedupe read set. An optional
+    "subscriptions" array ({ "subscriptionId", "displayName", "tenantId" }) fills the report's tenant and
+    subscription rows. Ignored without -InputPath (a warning is written).
 
     .PARAMETER Since
     Window start: <n>h, <n>d, <n>m (minutes) or an ISO-8601 UTC datetime. Default 24h. In local mode the
@@ -111,17 +112,23 @@ function Get-FlowLogTraffic {
             $window = Resolve-FlowLogWindow -Since $Since -UntilUtc $untilUtc
         }
         $state = New-FlowLogState -Window $window -Filter $filter
+        $subscriptions = @()
         if ($PSBoundParameters.ContainsKey('TopologyPath')) {
             $offline = New-FlowLogOfflineTopology -Path $TopologyPath
             $state.Topology = $offline.Topology
             foreach ($name in $offline.StorageNames) { $state.ReadAccounts[$name] = $true }
             $skipped = if ($offline.SkippedPrefixes -gt 0) { ", $($offline.SkippedPrefixes) non-IPv4 prefix(es) skipped." } else { '.' }
             $notes.Add("Offline topology from $(Split-Path -Leaf $TopologyPath): $($offline.NetworkCount) network(s), $($offline.PrefixCount) prefix(es)$skipped")
+            foreach ($note in $offline.SubscriptionNotes) { $notes.Add($note) }
+            $subscriptions = $offline.Subscriptions
+        }
+        else {
+            $notes.Add("Local input: no Azure topology was loaded. Public addresses are 'internet'; private addresses are 'unmapped'.")
         }
         foreach ($file in @(Get-FlowLogInputFile -InputPath $InputPath)) {
             Add-FlowLogBlobJson -State $state -Json ([System.IO.File]::ReadAllText($file))
         }
-        return Complete-FlowLogModel -State $state -Source 'local' -GeneratedUtc $nowUtc -Window $window -Filters $filters -Notes $notes
+        return Complete-FlowLogModel -State $state -Source 'local' -GeneratedUtc $nowUtc -Window $window -Filters $filters -Subscriptions $subscriptions -Notes $notes
     }
 
     if ($PSBoundParameters.ContainsKey('TopologyPath')) {
@@ -129,15 +136,25 @@ function Get-FlowLogTraffic {
     }
     $window = Resolve-FlowLogWindow -Since $Since -UntilUtc $untilUtc
     $monitoring = Get-FlowLogMonitoring -SubscriptionId $SubscriptionId -StorageAccountName $StorageAccountName -StaleAfterHours $StaleAfterHours -NowUtc $nowUtc
-    foreach ($note in $monitoring.Notes) { $notes.Add($note) }
 
     $state = New-FlowLogState -Window $window -Filter $filter
     $state.Topology = $monitoring.Topology
     # Accounts are marked as read before any blob is parsed, so the dedupe rule applies the same way to every observation.
     foreach ($plan in $monitoring.ReadPlan) { $state.ReadAccounts[$plan.Name] = $true }
+    $failedReads = [System.Collections.Generic.List[string]]::new()
     foreach ($plan in $monitoring.ReadPlan) {
-        Read-FlowLogAccount -State $state -Window $window -Plan $plan -Notes $notes
+        Read-FlowLogAccount -State $state -Window $window -Plan $plan -Failed $failedReads
     }
 
-    return Complete-FlowLogModel -State $state -Source 'azure' -GeneratedUtc $nowUtc -Window $window -Filters $filters -Monitoring $monitoring -Notes $notes
+    # Notes follow the .NET report's order: topology, failed reads, scope mapping, then discovery warnings.
+    foreach ($note in $monitoring.TopologyNotes) { $notes.Add($note) }
+    if ($failedReads.Count -gt 0) {
+        $names = [System.Collections.Generic.List[string]]::new([string[]]@($failedReads | Select-Object -Unique))
+        $names.Sort([System.StringComparer]::OrdinalIgnoreCase)
+        $notes.Add("Reads failed for $($names -join ', '): their outbound observations are missing, so inbound allowed duplicates from them were still skipped. Totals are lower than the true traffic.")
+    }
+    $notes.Add("Scope mapping: longest prefix match over NIC, subnet and VNet address ranges. Public addresses outside all known ranges are 'internet'; private ones are 'unmapped'.")
+    foreach ($warning in $monitoring.Warnings) { $notes.Add("Discovery warning: $warning") }
+
+    return Complete-FlowLogModel -State $state -Source 'azure' -GeneratedUtc $nowUtc -Window $window -Filters $filters -Monitoring $monitoring -Subscriptions $monitoring.Subscriptions -Notes $notes
 }
