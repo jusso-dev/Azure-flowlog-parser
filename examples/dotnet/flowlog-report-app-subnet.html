@@ -1,0 +1,648 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Azure VNet Flow Traffic Report</title>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --ink: #111827; --muted: #5b6472; --line: #dfe3ea;
+  --accent: #2563eb; --danger: #dc2626; --ok: #15803d; --warn: #b45309; --zebra: #f7f8fa;
+  --node: #e5edff; --node-line: #2563eb; --radius: 10px;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1218; --panel: #171c25; --ink: #e6e9ef; --muted: #98a2b3; --line: #2a3140;
+    --accent: #6ea8ff; --danger: #f87171; --ok: #4ade80; --warn: #fbbf24; --zebra: #1b212c;
+    --node: #1d2a44; --node-line: #6ea8ff;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1218; --panel: #171c25; --ink: #e6e9ef; --muted: #98a2b3; --line: #2a3140;
+  --accent: #6ea8ff; --danger: #f87171; --ok: #4ade80; --warn: #fbbf24; --zebra: #1b212c;
+  --node: #1d2a44; --node-line: #6ea8ff;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 var(--sans); }
+body { min-height: 100vh; }
+header.top { background: var(--panel); border-bottom: 1px solid var(--line); padding: 18px 16px; }
+header.top h1 { margin: 0 0 4px; font-size: 20px; }
+.meta { color: var(--muted); font-size: 12.5px; display: flex; flex-wrap: wrap; gap: 4px 16px; }
+main { padding: 16px; max-width: 1280px; margin: 0 auto; display: grid; gap: 16px; }
+section.card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; min-width: 0; }
+section.card > h2 { margin: 0 0 10px; font-size: 15px; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+.stat { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; }
+.stat .label { color: var(--muted); font-size: 12px; }
+.stat .value { font-size: 22px; font-weight: 650; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.stat .sub { color: var(--muted); font-size: 12px; }
+.filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px 12px; align-items: end; }
+.filters label { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
+select, input[type="text"], input[type="number"], button {
+  font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line);
+  border-radius: 7px; padding: 7px 9px; min-height: 36px; width: 100%;
+}
+button { width: auto; cursor: pointer; padding: 7px 12px; }
+button:hover { border-color: var(--accent); }
+button:disabled { opacity: 0.5; cursor: default; }
+.actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.hint { color: var(--muted); font-size: 12.5px; }
+.warn { color: var(--warn); font-size: 12.5px; }
+.layout { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 16px; }
+@media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
+svg.graph { width: 100%; height: auto; display: block; background: var(--bg); border-radius: 8px; border: 1px solid var(--line); }
+svg .edge { fill: none; opacity: 0.8; }
+svg .edge.allow { stroke: var(--accent); }
+svg .edge.deny { stroke: var(--danger); }
+svg .edge:hover { opacity: 1; }
+svg .node { cursor: pointer; stroke-width: 2; }
+svg .node.kind-storage { fill: var(--node); stroke: var(--node-line); }
+svg .node.kind-vnet { fill: var(--zebra); stroke: var(--muted); stroke-dasharray: 4 3; }
+svg .node.kind-internet { fill: var(--panel); stroke: var(--warn); }
+svg .node.kind-unmapped { fill: var(--panel); stroke: var(--muted); }
+svg .node.focused { stroke-width: 4; }
+svg text { fill: var(--ink); font: 11px var(--sans); pointer-events: none; }
+svg text.edge-label { fill: var(--muted); font-size: 10px; }
+.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { padding: 7px 9px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; vertical-align: top; }
+th { background: var(--zebra); font-weight: 600; font-size: 12px; color: var(--muted); position: sticky; top: 0; }
+th button.sort { background: none; border: 0; padding: 0; color: inherit; font: inherit; min-height: 0; width: auto; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+td.mono, td.ip { font-family: var(--mono); font-size: 12px; }
+tbody tr:nth-child(even) { background: var(--zebra); }
+tbody tr.clickable { cursor: pointer; }
+tbody tr.clickable:hover { outline: 1px solid var(--accent); outline-offset: -1px; }
+.badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; border: 1px solid currentColor; }
+.s-Healthy { color: var(--ok); } .s-Stale, .s-Disabled, .s-Unmanaged { color: var(--warn); }
+.s-NoData, .s-Error, .s-AccessDenied, .s-NoFlowLogs { color: var(--danger); }
+.allow-t { color: var(--ok); } .deny-t { color: var(--danger); }
+.bar { height: 8px; border-radius: 4px; background: var(--accent); min-width: 2px; }
+.bar-wrap { width: 120px; background: var(--zebra); border-radius: 4px; }
+.pager { display: flex; gap: 8px; align-items: center; justify-content: space-between; margin-top: 10px; flex-wrap: wrap; }
+.focus-panel { display: grid; gap: 10px; }
+.focus-panel dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0; font-size: 13px; }
+.focus-panel dt { color: var(--muted); }
+.focus-panel dd { margin: 0; font-variant-numeric: tabular-nums; }
+ul.notes { margin: 0; padding-left: 18px; color: var(--muted); font-size: 13px; }
+ul.notes li { margin: 4px 0; }
+footer { color: var(--muted); font-size: 12px; text-align: center; padding: 8px 16px 24px; }
+@media (max-width: 600px) {
+  header.top, main { padding-left: 16px; padding-right: 16px; }
+  section.card { padding: 12px; }
+}
+</style>
+</head>
+<body>
+<header class="top">
+  <h1>Azure VNet Flow Traffic Report</h1>
+  <div class="meta" id="meta"></div>
+</header>
+
+<main>
+  <div class="cards" id="cards" aria-live="polite"></div>
+
+  <section class="card" aria-labelledby="filters-title">
+    <h2 id="filters-title">Filters</h2>
+    <div class="filters">
+      <label>Focus scope
+        <select id="f-focus"><option value="">All scopes</option></select>
+      </label>
+      <label>Action
+        <select id="f-action">
+          <option value="all">All</option>
+          <option value="allow">Allowed</option>
+          <option value="deny">Denied</option>
+        </select>
+      </label>
+      <label>Protocol
+        <select id="f-protocol">
+          <option value="all">All</option>
+          <option value="TCP">TCP</option>
+          <option value="UDP">UDP</option>
+        </select>
+      </label>
+      <label>Destination port(s)
+        <input type="text" id="f-ports" placeholder="e.g. 443,8000-8100" autocomplete="off">
+      </label>
+      <label>IP contains
+        <input type="text" id="f-ip" placeholder="10.0.1." autocomplete="off">
+      </label>
+      <label>Minimum bytes
+        <input type="number" id="f-bytes" min="0" step="1" value="0">
+      </label>
+      <div class="actions">
+        <button type="button" id="f-reset">Reset filters</button>
+        <span class="hint" id="f-hint"></span>
+      </div>
+    </div>
+    <div class="warn" id="f-warn" role="status"></div>
+  </section>
+
+  <div class="layout">
+    <section class="card" aria-labelledby="graph-title">
+      <h2 id="graph-title">Traffic between scopes</h2>
+      <svg class="graph" id="graph" viewBox="0 0 640 520" role="img" aria-label="Traffic graph between network scopes"></svg>
+      <p class="hint" id="graph-hint"></p>
+    </section>
+    <section class="card" aria-labelledby="focus-title">
+      <h2 id="focus-title">Scope detail</h2>
+      <div class="focus-panel" id="focus"></div>
+    </section>
+  </div>
+
+  <section class="card" aria-labelledby="edges-title">
+    <h2 id="edges-title">Scope-to-scope traffic</h2>
+    <div class="table-wrap">
+      <table id="edges">
+        <thead><tr></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card" aria-labelledby="flows-title">
+    <h2 id="flows-title">Flow rows</h2>
+    <div class="table-wrap">
+      <table id="flows">
+        <thead><tr></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="pager">
+      <span class="hint" id="flows-count"></span>
+      <div class="actions">
+        <button type="button" id="p-prev">Previous</button>
+        <span class="hint" id="p-label"></span>
+        <button type="button" id="p-next">Next</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="card" aria-labelledby="monitor-title">
+    <h2 id="monitor-title">Storage accounts and flow log health</h2>
+    <div class="table-wrap">
+      <table id="accounts">
+        <thead><tr><th>Storage account</th><th>Subscription</th><th>Status</th><th class="num">Configs</th><th>Latest blob (UTC)</th><th>Unmanaged source</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="table-wrap" style="margin-top:12px">
+      <table id="logs">
+        <thead><tr><th>Storage account</th><th>Target</th><th>Kind</th><th>Enabled</th><th>Status</th><th class="num">Age (h)</th><th>Latest blob (UTC)</th><th>Message</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card" aria-labelledby="notes-title">
+    <h2 id="notes-title">Notes</h2>
+    <ul class="notes" id="notes"></ul>
+  </section>
+</main>
+<footer id="footer"></footer>
+
+<script id="flowlog-data" type="application/json">{"schema":1,"generatedUtc":"2026-10-19T08:08:39Z","source":"local","window":{"fromUtc":"2026-10-18T10:00:00Z","toUtc":"2026-10-18T13:00:00Z"},"filters":{"action":"all","protocol":"all","ports":"","ip":"10.10.1.","minBytes":0},"summary":{"flows":257,"allowed":212,"denied":45,"bytes":14096582,"packets":19547,"rows":206,"rowsTotal":206,"rowsTruncated":false,"storageAccounts":2,"scopes":4,"subscriptions":0,"observationsSkipped":99,"uniqueSourceIps":25,"uniqueDestinationIps":29},"scopes":[{"id":"internet","kind":"internet","label":"Internet","subscriptionId":"","resourceGroup":"","storageAccount":""},{"id":"stflowlogsapp01","kind":"storage","label":"stflowlogsapp01","subscriptionId":"","resourceGroup":"","storageAccount":"stflowlogsapp01"},{"id":"stflowlogsdata02","kind":"storage","label":"stflowlogsdata02","subscriptionId":"","resourceGroup":"","storageAccount":"stflowlogsdata02"},{"id":"vnet:vnet-hub","kind":"vnet","label":"vnet-hub","subscriptionId":"","resourceGroup":"","storageAccount":""}],"flows":[{"first":"2026-10-18T10:00:57Z","last":"2026-10-18T12:26:37Z","src":"10.10.1.18","dst":"10.20.2.5","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":1433,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":3,"packets":362,"bytes":318583},{"first":"2026-10-18T10:31:28Z","last":"2026-10-18T12:37:06Z","src":"10.10.1.16","dst":"20.190.151.1","srcScope":"stflowlogsapp01","dstScope":"internet","proto":"TCP","dstPort":443,"action":"A","direction":"O","rule":"DefaultRule_AllowInternetOutBound","flows":3,"packets":446,"bytes":281938},{"first":"2026-10-18T10:33:25Z","last":"2026-10-18T11:58:26Z","src":"10.10.1.10","dst":"52.96.0.1","srcScope":"stflowlogsapp01","dstScope":"internet","proto":"TCP","dstPort":443,"action":"A","direction":"O","rule":"DefaultRule_AllowInternetOutBound","flows":2,"packets":254,"bytes":257592},{"first":"2026-10-18T10:46:43Z","last":"2026-10-18T12:45:44Z","src":"10.10.1.15","dst":"10.20.2.6","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":1433,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":3,"packets":255,"bytes":234541},{"first":"2026-10-18T10:10:32Z","last":"2026-10-18T11:49:11Z","src":"10.10.1.8","dst":"104.46.162.5","srcScope":"stflowlogsapp01","dstScope":"internet","proto":"TCP","dstPort":443,"action":"A","direction":"O","rule":"DefaultRule_AllowInternetOutBound","flows":2,"packets":212,"bytes":232687},{"first":"2026-10-18T10:11:50Z","last":"2026-10-18T10:11:50Z","src":"10.10.1.5","dst":"10.20.2.11","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":1433,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":168,"bytes":230496},{"first":"2026-10-18T11:16:40Z","last":"2026-10-18T12:49:00Z","src":"10.10.1.12","dst":"10.20.2.6","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":1433,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":2,"packets":217,"bytes":222717},{"first":"2026-10-18T10:08:07Z","last":"2026-10-18T10:08:07Z","src":"10.10.1.7","dst":"10.20.2.7","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":172,"bytes":222525},{"first":"2026-10-18T12:31:41Z","last":"2026-10-18T12:31:41Z","src":"13.107.42.14","dst":"10.10.1.14","srcScope":"internet","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":443,"action":"A","direction":"I","rule":"UserRule_AllowWebIn","flows":1,"packets":160,"bytes":220848},{"first":"2026-10-18T12:27:23Z","last":"2026-10-18T12:27:23Z","src":"10.10.1.13","dst":"10.20.2.10","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":160,"bytes":206082},{"first":"2026-10-18T11:57:13Z","last":"2026-10-18T11:57:13Z","src":"10.10.1.14","dst":"20.190.151.1","srcScope":"stflowlogsapp01","dstScope":"internet","proto":"TCP","dstPort":443,"action":"A","direction":"O","rule":"DefaultRule_AllowInternetOutBound","flows":1,"packets":144,"bytes":190080},{"first":"2026-10-18T10:29:31Z","last":"2026-10-18T10:29:31Z","src":"52.96.0.1","dst":"10.10.1.14","srcScope":"internet","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":443,"action":"A","direction":"I","rule":"UserRule_AllowWebIn","flows":1,"packets":175,"bytes":187785},{"first":"2026-10-18T11:41:32Z","last":"2026-10-18T12:14:49Z","src":"10.10.1.8","dst":"10.20.2.10","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":2,"packets":289,"bytes":186465},{"first":"2026-10-18T11:18:02Z","last":"2026-10-18T11:18:02Z","src":"10.10.1.13","dst":"10.20.2.7","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":142,"bytes":184965},{"first":"2026-10-18T10:22:46Z","last":"2026-10-18T10:22:46Z","src":"52.96.0.1","dst":"10.10.1.5","srcScope":"internet","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":443,"action":"A","direction":"I","rule":"UserRule_AllowWebIn","flows":1,"packets":142,"bytes":181402},{"first":"2026-10-18T10:40:33Z","last":"2026-10-18T10:40:33Z","src":"10.10.1.7","dst":"52.96.0.1","srcScope":"stflowlogsapp01","dstScope":"internet","proto":"TCP","dstPort":443,"action":"A","direction":"O","rule":"DefaultRule_AllowInternetOutBound","flows":1,"packets":166,"bytes":180819},{"first":"2026-10-18T11:47:22Z","last":"2026-10-18T12:02:38Z","src":"10.10.1.5","dst":"40.112.72.205","srcScope":"stflowlogsapp01","dstScope":"internet","proto":"TCP","dstPort":443,"action":"A","direction":"O","rule":"DefaultRule_AllowInternetOutBound","flows":2,"packets":133,"bytes":180753},{"first":"2026-10-18T10:22:48Z","last":"2026-10-18T12:02:24Z","src":"20.190.151.1","dst":"10.10.1.17","srcScope":"internet","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":443,"action":"A","direction":"I","rule":"UserRule_AllowWebIn","flows":2,"packets":265,"bytes":175617},{"first":"2026-10-18T10:19:52Z","last":"2026-10-18T11:46:25Z","src":"10.10.1.9","dst":"10.10.1.8","srcScope":"stflowlogsapp01","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":445,"action":"A","direction":"O","rule":"DefaultRule_AllowVnetInBound","flows":2,"packets":193,"bytes":174618},{"first":"2026-10-18T12:06:20Z","last":"2026-10-18T12:06:20Z","src":"104.46.162.5","dst":"10.10.1.4","srcScope":"internet","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":443,"action":"A","direction":"I","rule":"UserRule_AllowWebIn","flows":1,"packets":142,"bytes":171712},{"first":"2026-10-18T11:25:03Z","last":"2026-10-18T11:25:03Z","src":"10.10.1.18","dst":"10.10.1.5","srcScope":"stflowlogsapp01","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":445,"action":"A","direction":"O","rule":"DefaultRule_AllowVnetInBound","flows":1,"packets":130,"bytes":171477},{"first":"2026-10-18T11:56:37Z","last":"2026-10-18T11:56:37Z","src":"10.10.1.13","dst":"10.10.1.16","srcScope":"stflowlogsapp01","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":445,"action":"A","direction":"O","rule":"DefaultRule_AllowVnetInBound","flows":1,"packets":129,"bytes":170022},{"first":"2026-10-18T11:23:30Z","last":"2026-10-18T11:23:30Z","src":"10.10.1.8","dst":"10.20.2.7","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":1433,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":159,"bytes":163929},{"first":"2026-10-18T10:12:52Z","last":"2026-10-18T10:12:52Z","src":"10.10.1.4","dst":"10.10.1.17","srcScope":"stflowlogsapp01","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":445,"action":"A","direction":"O","rule":"DefaultRule_AllowVnetInBound","flows":1,"packets":117,"bytes":162162},{"first":"2026-10-18T10:17:10Z","last":"2026-10-18T10:17:10Z","src":"10.10.1.15","dst":"104.46.162.5","srcScope":"stflowlogsapp01","dstScope":"internet","proto":"TCP","dstPort":443,"action":"A","direction":"O","rule":"DefaultRule_AllowInternetOutBound","flows":1,"packets":144,"bytes":159984},{"first":"2026-10-18T11:32:10Z","last":"2026-10-18T11:32:10Z","src":"10.10.1.6","dst":"10.10.1.18","srcScope":"stflowlogsapp01","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":445,"action":"A","direction":"O","rule":"DefaultRule_AllowVnetInBound","flows":1,"packets":135,"bytes":159165},{"first":"2026-10-18T10:48:06Z","last":"2026-10-18T11:11:10Z","src":"13.107.42.14","dst":"10.10.1.17","srcScope":"internet","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":443,"action":"A","direction":"I","rule":"UserRule_AllowWebIn","flows":2,"packets":218,"bytes":152858},{"first":"2026-10-18T10:09:47Z","last":"2026-10-18T11:56:02Z","src":"13.107.42.14","dst":"10.10.1.12","srcScope":"internet","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":443,"action":"A","direction":"I","rule":"UserRule_AllowWebIn","flows":4,"packets":239,"bytes":150889},{"first":"2026-10-18T10:35:39Z","last":"2026-10-18T11:54:27Z","src":"104.46.162.5","dst":"10.10.1.14","srcScope":"internet","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":443,"action":"A","direction":"I","rule":"UserRule_AllowWebIn","flows":2,"packets":242,"bytes":145927},{"first":"2026-10-18T11:20:57Z","last":"2026-10-18T11:20:57Z","src":"10.10.1.11","dst":"10.10.1.9","srcScope":"stflowlogsapp01","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":445,"action":"A","direction":"O","rule":"DefaultRule_AllowVnetInBound","flows":1,"packets":138,"bytes":140622},{"first":"2026-10-18T10:24:18Z","last":"2026-10-18T10:24:18Z","src":"10.10.1.16","dst":"40.112.72.205","srcScope":"stflowlogsapp01","dstScope":"internet","proto":"TCP","dstPort":443,"action":"A","direction":"O","rule":"DefaultRule_AllowInternetOutBound","flows":1,"packets":150,"bytes":138300},{"first":"2026-10-18T11:56:52Z","last":"2026-10-18T11:56:52Z","src":"10.10.1.6","dst":"10.20.2.8","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":1433,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":145,"bytes":138225},{"first":"2026-10-18T10:26:33Z","last":"2026-10-18T10:26:33Z","src":"10.10.1.15","dst":"10.20.2.4","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":142,"bytes":135945},{"first":"2026-10-18T10:28:07Z","last":"2026-10-18T12:27:45Z","src":"10.10.1.8","dst":"20.190.151.1","srcScope":"stflowlogsapp01","dstScope":"internet","proto":"TCP","dstPort":443,"action":"A","direction":"O","rule":"DefaultRule_AllowInternetOutBound","flows":2,"packets":312,"bytes":135720},{"first":"2026-10-18T10:49:38Z","last":"2026-10-18T10:49:38Z","src":"10.10.1.7","dst":"10.10.1.8","srcScope":"stflowlogsapp01","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":445,"action":"A","direction":"O","rule":"DefaultRule_AllowVnetInBound","flows":1,"packets":148,"bytes":135580},{"first":"2026-10-18T12:57:58Z","last":"2026-10-18T12:57:58Z","src":"10.10.1.10","dst":"20.190.151.1","srcScope":"stflowlogsapp01","dstScope":"internet","proto":"TCP","dstPort":443,"action":"A","direction":"O","rule":"DefaultRule_AllowInternetOutBound","flows":1,"packets":105,"bytes":134610},{"first":"2026-10-18T11:01:14Z","last":"2026-10-18T11:01:14Z","src":"10.10.1.6","dst":"10.10.1.16","srcScope":"stflowlogsapp01","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":445,"action":"A","direction":"O","rule":"DefaultRule_AllowVnetInBound","flows":1,"packets":117,"bytes":131742},{"first":"2026-10-18T11:28:59Z","last":"2026-10-18T12:37:17Z","src":"10.10.1.9","dst":"10.20.2.4","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":1433,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":2,"packets":292,"bytes":130297},{"first":"2026-10-18T10:12:03Z","last":"2026-10-18T10:12:03Z","src":"10.10.1.18","dst":"10.20.2.7","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":1433,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":166,"bytes":128704},{"first":"2026-10-18T10:33:58Z","last":"2026-10-18T10:33:58Z","src":"10.10.1.9","dst":"10.10.1.6","srcScope":"stflowlogsapp01","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":445,"action":"A","direction":"O","rule":"DefaultRule_AllowVnetInBound","flows":1,"packets":114,"bytes":128136},{"first":"2026-10-18T11:40:16Z","last":"2026-10-18T11:40:16Z","src":"10.10.1.19","dst":"10.20.2.6","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":1433,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":117,"bytes":127413},{"first":"2026-10-18T11:06:16Z","last":"2026-10-18T11:06:16Z","src":"10.10.1.17","dst":"40.112.72.205","srcScope":"stflowlogsapp01","dstScope":"internet","proto":"TCP","dstPort":443,"action":"A","direction":"O","rule":"DefaultRule_AllowInternetOutBound","flows":1,"packets":174,"bytes":125976},{"first":"2026-10-18T10:41:38Z","last":"2026-10-18T10:42:07Z","src":"10.10.1.7","dst":"10.20.2.9","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":2,"packets":185,"bytes":125276},{"first":"2026-10-18T10:07:14Z","last":"2026-10-18T10:07:14Z","src":"10.10.1.6","dst":"13.107.42.14","srcScope":"stflowlogsapp01","dstScope":"internet","proto":"TCP","dstPort":443,"action":"A","direction":"O","rule":"DefaultRule_AllowInternetOutBound","flows":1,"packets":160,"bytes":123585},{"first":"2026-10-18T11:28:13Z","last":"2026-10-18T11:28:13Z","src":"10.10.1.4","dst":"52.96.0.1","srcScope":"stflowlogsapp01","dstScope":"internet","proto":"TCP","dstPort":443,"action":"A","direction":"O","rule":"DefaultRule_AllowInternetOutBound","flows":1,"packets":105,"bytes":123375},{"first":"2026-10-18T12:32:35Z","last":"2026-10-18T12:32:35Z","src":"10.10.1.7","dst":"104.46.162.5","srcScope":"stflowlogsapp01","dstScope":"internet","proto":"TCP","dstPort":443,"action":"A","direction":"O","rule":"DefaultRule_AllowInternetOutBound","flows":1,"packets":136,"bytes":119847},{"first":"2026-10-18T12:15:07Z","last":"2026-10-18T12:15:07Z","src":"10.10.1.13","dst":"10.20.2.10","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":1433,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":168,"bytes":119616},{"first":"2026-10-18T10:52:54Z","last":"2026-10-18T11:37:33Z","src":"10.10.1.4","dst":"10.20.2.10","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":1433,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":2,"packets":189,"bytes":118944},{"first":"2026-10-18T12:14:46Z","last":"2026-10-18T12:14:46Z","src":"10.10.1.8","dst":"10.20.2.10","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":1433,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":136,"bytes":118891},{"first":"2026-10-18T11:54:37Z","last":"2026-10-18T12:09:47Z","src":"10.10.1.16","dst":"10.20.2.6","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":1433,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":2,"packets":169,"bytes":118833},{"first":"2026-10-18T10:22:14Z","last":"2026-10-18T10:22:14Z","src":"104.46.162.5","dst":"10.10.1.7","srcScope":"internet","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":443,"action":"A","direction":"I","rule":"UserRule_AllowWebIn","flows":1,"packets":102,"bytes":115668},{"first":"2026-10-18T11:43:32Z","last":"2026-10-18T11:43:32Z","src":"10.10.1.14","dst":"10.20.2.10","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":1433,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":124,"bytes":115536},{"first":"2026-10-18T11:08:39Z","last":"2026-10-18T12:18:02Z","src":"10.10.1.17","dst":"10.20.2.7","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":1433,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":3,"packets":303,"bytes":115349},{"first":"2026-10-18T12:06:57Z","last":"2026-10-18T12:50:31Z","src":"10.10.1.19","dst":"10.10.1.9","srcScope":"stflowlogsapp01","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":445,"action":"A","direction":"O","rule":"DefaultRule_AllowVnetInBound","flows":2,"packets":178,"bytes":111381},{"first":"2026-10-18T12:07:42Z","last":"2026-10-18T12:07:42Z","src":"10.10.1.19","dst":"104.46.162.5","srcScope":"stflowlogsapp01","dstScope":"internet","proto":"TCP","dstPort":443,"action":"A","direction":"O","rule":"DefaultRule_AllowInternetOutBound","flows":1,"packets":87,"bytes":111360},{"first":"2026-10-18T11:24:27Z","last":"2026-10-18T11:24:27Z","src":"10.10.1.15","dst":"10.20.2.10","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":1433,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":142,"bytes":110865},{"first":"2026-10-18T12:31:47Z","last":"2026-10-18T12:31:47Z","src":"10.10.1.9","dst":"10.10.1.10","srcScope":"stflowlogsapp01","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":445,"action":"A","direction":"O","rule":"DefaultRule_AllowVnetInBound","flows":1,"packets":105,"bytes":110355},{"first":"2026-10-18T12:19:33Z","last":"2026-10-18T12:19:33Z","src":"10.10.1.15","dst":"10.20.2.7","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":1433,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":165,"bytes":107745},{"first":"2026-10-18T11:17:29Z","last":"2026-10-18T11:37:13Z","src":"10.10.1.7","dst":"10.20.2.5","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":1433,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":2,"packets":175,"bytes":106261},{"first":"2026-10-18T12:33:25Z","last":"2026-10-18T12:33:25Z","src":"10.10.1.14","dst":"10.20.2.7","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":141,"bytes":103917},{"first":"2026-10-18T12:55:15Z","last":"2026-10-18T12:55:15Z","src":"10.10.1.16","dst":"10.20.2.10","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":1433,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":144,"bytes":101232},{"first":"2026-10-18T11:35:53Z","last":"2026-10-18T11:35:53Z","src":"10.10.1.17","dst":"10.20.2.10","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":75,"bytes":100125},{"first":"2026-10-18T11:29:35Z","last":"2026-10-18T12:30:57Z","src":"10.10.1.17","dst":"10.20.2.4","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":1433,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":2,"packets":172,"bytes":99558},{"first":"2026-10-18T10:28:38Z","last":"2026-10-18T10:28:38Z","src":"10.10.1.11","dst":"10.20.2.11","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":1433,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":127,"bytes":96645},{"first":"2026-10-18T12:35:20Z","last":"2026-10-18T12:42:44Z","src":"104.46.162.5","dst":"10.10.1.17","srcScope":"internet","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":443,"action":"A","direction":"I","rule":"UserRule_AllowWebIn","flows":2,"packets":240,"bytes":95685},{"first":"2026-10-18T12:21:10Z","last":"2026-10-18T12:21:10Z","src":"10.10.1.8","dst":"10.20.2.4","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":1433,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":144,"bytes":95328},{"first":"2026-10-18T11:42:45Z","last":"2026-10-18T11:53:39Z","src":"10.10.1.11","dst":"10.20.2.9","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":1433,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":3,"packets":292,"bytes":92280},{"first":"2026-10-18T10:14:39Z","last":"2026-10-18T10:14:39Z","src":"10.10.1.11","dst":"10.20.2.7","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":1433,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":82,"bytes":90750},{"first":"2026-10-18T10:57:18Z","last":"2026-10-18T10:57:18Z","src":"10.10.1.5","dst":"10.20.2.8","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":1433,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":66,"bytes":89496},{"first":"2026-10-18T11:59:21Z","last":"2026-10-18T11:59:21Z","src":"20.190.151.1","dst":"10.10.1.7","srcScope":"internet","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":443,"action":"A","direction":"I","rule":"UserRule_AllowWebIn","flows":1,"packets":109,"bytes":89133},{"first":"2026-10-18T10:29:02Z","last":"2026-10-18T10:29:02Z","src":"20.190.151.1","dst":"10.10.1.19","srcScope":"internet","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":443,"action":"A","direction":"I","rule":"UserRule_AllowWebIn","flows":1,"packets":76,"bytes":86751},{"first":"2026-10-18T10:13:49Z","last":"2026-10-18T12:15:25Z","src":"10.10.1.12","dst":"10.20.2.4","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":2,"packets":137,"bytes":86265},{"first":"2026-10-18T11:18:07Z","last":"2026-10-18T11:18:07Z","src":"10.10.1.11","dst":"10.20.2.4","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":177,"bytes":82305},{"first":"2026-10-18T10:49:21Z","last":"2026-10-18T12:56:46Z","src":"10.10.1.13","dst":"52.96.0.1","srcScope":"stflowlogsapp01","dstScope":"internet","proto":"TCP","dstPort":443,"action":"A","direction":"O","rule":"DefaultRule_AllowInternetOutBound","flows":2,"packets":148,"bytes":80898},{"first":"2026-10-18T12:20:35Z","last":"2026-10-18T12:20:35Z","src":"10.10.1.17","dst":"10.20.2.8","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":1433,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":82,"bytes":78622},{"first":"2026-10-18T10:53:56Z","last":"2026-10-18T10:53:56Z","src":"10.10.1.12","dst":"10.20.2.9","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":166,"bytes":78421},{"first":"2026-10-18T11:08:56Z","last":"2026-10-18T11:20:50Z","src":"10.10.1.18","dst":"10.20.2.10","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":1433,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":2,"packets":340,"bytes":78207},{"first":"2026-10-18T12:03:45Z","last":"2026-10-18T12:03:45Z","src":"40.112.72.205","dst":"10.10.1.11","srcScope":"internet","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":443,"action":"A","direction":"I","rule":"UserRule_AllowWebIn","flows":1,"packets":63,"bytes":78183},{"first":"2026-10-18T10:23:07Z","last":"2026-10-18T10:23:07Z","src":"10.10.1.11","dst":"10.20.2.5","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":1433,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":127,"bytes":77775},{"first":"2026-10-18T12:07:55Z","last":"2026-10-18T12:07:55Z","src":"20.190.151.1","dst":"10.10.1.8","srcScope":"internet","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":443,"action":"A","direction":"I","rule":"UserRule_AllowWebIn","flows":1,"packets":156,"bytes":77688},{"first":"2026-10-18T10:55:25Z","last":"2026-10-18T10:55:25Z","src":"10.10.1.12","dst":"10.20.2.11","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":1433,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":178,"bytes":77469},{"first":"2026-10-18T11:51:00Z","last":"2026-10-18T12:24:42Z","src":"10.10.1.5","dst":"10.20.2.10","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":1433,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":2,"packets":73,"bytes":73146},{"first":"2026-10-18T11:42:10Z","last":"2026-10-18T12:08:06Z","src":"10.10.1.9","dst":"104.46.162.5","srcScope":"stflowlogsapp01","dstScope":"internet","proto":"TCP","dstPort":443,"action":"A","direction":"O","rule":"DefaultRule_AllowInternetOutBound","flows":2,"packets":150,"bytes":70821},{"first":"2026-10-18T10:26:45Z","last":"2026-10-18T10:46:54Z","src":"20.190.151.1","dst":"10.10.1.10","srcScope":"internet","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":443,"action":"A","direction":"I","rule":"UserRule_AllowWebIn","flows":2,"packets":52,"bytes":69007},{"first":"2026-10-18T11:31:40Z","last":"2026-10-18T11:31:40Z","src":"10.10.1.5","dst":"10.20.2.4","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":1433,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":79,"bytes":67575},{"first":"2026-10-18T10:52:32Z","last":"2026-10-18T10:52:32Z","src":"10.10.1.4","dst":"10.10.1.12","srcScope":"stflowlogsapp01","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":445,"action":"A","direction":"O","rule":"DefaultRule_AllowVnetInBound","flows":1,"packets":91,"bytes":66886},{"first":"2026-10-18T12:08:27Z","last":"2026-10-18T12:08:27Z","src":"10.10.1.12","dst":"10.20.2.7","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":1433,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":46,"bytes":62775},{"first":"2026-10-18T11:13:15Z","last":"2026-10-18T11:13:15Z","src":"13.107.42.14","dst":"10.10.1.16","srcScope":"internet","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":443,"action":"A","direction":"I","rule":"UserRule_AllowWebIn","flows":1,"packets":49,"bytes":62568},{"first":"2026-10-18T10:53:53Z","last":"2026-10-18T10:53:53Z","src":"10.10.1.9","dst":"10.20.2.6","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":52,"bytes":61215},{"first":"2026-10-18T11:44:27Z","last":"2026-10-18T11:44:27Z","src":"10.10.1.15","dst":"40.112.72.205","srcScope":"stflowlogsapp01","dstScope":"internet","proto":"TCP","dstPort":443,"action":"A","direction":"O","rule":"DefaultRule_AllowInternetOutBound","flows":1,"packets":105,"bytes":60900},{"first":"2026-10-18T12:36:35Z","last":"2026-10-18T12:36:35Z","src":"10.10.1.7","dst":"10.20.2.7","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":1433,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":45,"bytes":60300},{"first":"2026-10-18T11:35:04Z","last":"2026-10-18T11:35:04Z","src":"10.10.1.13","dst":"104.46.162.5","srcScope":"stflowlogsapp01","dstScope":"internet","proto":"TCP","dstPort":443,"action":"A","direction":"O","rule":"DefaultRule_AllowInternetOutBound","flows":1,"packets":43,"bytes":58681},{"first":"2026-10-18T10:05:19Z","last":"2026-10-18T10:05:19Z","src":"10.10.1.9","dst":"10.10.1.16","srcScope":"stflowlogsapp01","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":445,"action":"A","direction":"O","rule":"DefaultRule_AllowVnetInBound","flows":1,"packets":49,"bytes":56479},{"first":"2026-10-18T10:36:10Z","last":"2026-10-18T10:36:10Z","src":"10.10.1.8","dst":"10.20.2.6","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":1433,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":127,"bytes":56100},{"first":"2026-10-18T11:24:55Z","last":"2026-10-18T11:24:55Z","src":"10.10.1.19","dst":"20.190.151.1","srcScope":"stflowlogsapp01","dstScope":"internet","proto":"TCP","dstPort":443,"action":"A","direction":"O","rule":"DefaultRule_AllowInternetOutBound","flows":1,"packets":88,"bytes":54781},{"first":"2026-10-18T10:39:48Z","last":"2026-10-18T10:39:48Z","src":"104.46.162.5","dst":"10.10.1.8","srcScope":"internet","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":443,"action":"A","direction":"I","rule":"UserRule_AllowWebIn","flows":1,"packets":105,"bytes":54180},{"first":"2026-10-18T10:14:58Z","last":"2026-10-18T10:14:58Z","src":"10.10.1.10","dst":"10.10.1.13","srcScope":"stflowlogsapp01","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":445,"action":"A","direction":"O","rule":"DefaultRule_AllowVnetInBound","flows":1,"packets":130,"bytes":53374},{"first":"2026-10-18T11:29:20Z","last":"2026-10-18T12:18:17Z","src":"10.10.1.18","dst":"10.20.2.6","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":1433,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":2,"packets":83,"bytes":51742},{"first":"2026-10-18T12:11:49Z","last":"2026-10-18T12:11:49Z","src":"20.190.151.1","dst":"10.10.1.9","srcScope":"internet","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":443,"action":"A","direction":"I","rule":"UserRule_AllowWebIn","flows":1,"packets":40,"bytes":51718},{"first":"2026-10-18T11:02:19Z","last":"2026-10-18T11:02:19Z","src":"52.96.0.1","dst":"10.10.1.18","srcScope":"internet","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":443,"action":"A","direction":"I","rule":"UserRule_AllowWebIn","flows":1,"packets":57,"bytes":51642},{"first":"2026-10-18T10:26:09Z","last":"2026-10-18T10:26:09Z","src":"10.10.1.15","dst":"10.20.2.6","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":51,"bytes":51510},{"first":"2026-10-18T11:16:14Z","last":"2026-10-18T12:31:56Z","src":"10.10.1.5","dst":"20.190.151.1","srcScope":"stflowlogsapp01","dstScope":"internet","proto":"TCP","dstPort":443,"action":"A","direction":"O","rule":"DefaultRule_AllowInternetOutBound","flows":3,"packets":156,"bytes":51288},{"first":"2026-10-18T11:16:10Z","last":"2026-10-18T11:16:10Z","src":"10.10.1.10","dst":"10.20.2.9","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":1433,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":78,"bytes":49218},{"first":"2026-10-18T10:57:28Z","last":"2026-10-18T10:57:28Z","src":"10.10.1.15","dst":"52.96.0.1","srcScope":"stflowlogsapp01","dstScope":"internet","proto":"TCP","dstPort":443,"action":"A","direction":"O","rule":"DefaultRule_AllowInternetOutBound","flows":1,"packets":42,"bytes":48258},{"first":"2026-10-18T12:33:08Z","last":"2026-10-18T12:33:08Z","src":"10.10.1.13","dst":"13.107.42.14","srcScope":"stflowlogsapp01","dstScope":"internet","proto":"TCP","dstPort":443,"action":"A","direction":"O","rule":"DefaultRule_AllowInternetOutBound","flows":1,"packets":70,"bytes":48222},{"first":"2026-10-18T10:35:09Z","last":"2026-10-18T10:35:09Z","src":"10.10.1.15","dst":"10.20.2.5","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":108,"bytes":47952},{"first":"2026-10-18T10:42:51Z","last":"2026-10-18T10:42:51Z","src":"10.10.1.19","dst":"10.10.1.4","srcScope":"stflowlogsapp01","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":445,"action":"A","direction":"O","rule":"DefaultRule_AllowVnetInBound","flows":1,"packets":43,"bytes":47893},{"first":"2026-10-18T12:00:15Z","last":"2026-10-18T12:00:15Z","src":"10.10.1.6","dst":"10.10.1.5","srcScope":"stflowlogsapp01","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":445,"action":"A","direction":"O","rule":"DefaultRule_AllowVnetInBound","flows":1,"packets":57,"bytes":47139},{"first":"2026-10-18T12:51:37Z","last":"2026-10-18T12:51:37Z","src":"10.10.1.12","dst":"13.107.42.14","srcScope":"stflowlogsapp01","dstScope":"internet","proto":"TCP","dstPort":443,"action":"A","direction":"O","rule":"DefaultRule_AllowInternetOutBound","flows":1,"packets":123,"bytes":46740},{"first":"2026-10-18T11:00:16Z","last":"2026-10-18T11:00:16Z","src":"52.96.0.1","dst":"10.10.1.8","srcScope":"internet","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":443,"action":"A","direction":"I","rule":"UserRule_AllowWebIn","flows":1,"packets":79,"bytes":45792},{"first":"2026-10-18T11:23:38Z","last":"2026-10-18T11:23:38Z","src":"10.10.1.18","dst":"10.20.2.11","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":165,"bytes":43395},{"first":"2026-10-18T11:28:35Z","last":"2026-10-18T11:28:35Z","src":"10.10.1.11","dst":"10.20.2.6","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":1433,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":85,"bytes":38133},{"first":"2026-10-18T12:01:09Z","last":"2026-10-18T12:01:09Z","src":"10.10.1.17","dst":"10.10.1.13","srcScope":"stflowlogsapp01","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":445,"action":"A","direction":"O","rule":"DefaultRule_AllowVnetInBound","flows":1,"packets":28,"bytes":37762},{"first":"2026-10-18T10:13:28Z","last":"2026-10-18T10:13:28Z","src":"13.107.42.14","dst":"10.10.1.9","srcScope":"internet","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":443,"action":"A","direction":"I","rule":"UserRule_AllowWebIn","flows":1,"packets":120,"bytes":37320},{"first":"2026-10-18T11:56:07Z","last":"2026-10-18T11:56:07Z","src":"10.10.1.19","dst":"52.96.0.1","srcScope":"stflowlogsapp01","dstScope":"internet","proto":"TCP","dstPort":443,"action":"A","direction":"O","rule":"DefaultRule_AllowInternetOutBound","flows":1,"packets":55,"bytes":37240},{"first":"2026-10-18T10:05:44Z","last":"2026-10-18T10:05:44Z","src":"10.10.1.12","dst":"10.20.2.6","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":138,"bytes":36708},{"first":"2026-10-18T10:36:56Z","last":"2026-10-18T10:36:56Z","src":"10.10.1.12","dst":"52.96.0.1","srcScope":"stflowlogsapp01","dstScope":"internet","proto":"TCP","dstPort":443,"action":"A","direction":"O","rule":"DefaultRule_AllowInternetOutBound","flows":1,"packets":27,"bytes":36261},{"first":"2026-10-18T11:54:29Z","last":"2026-10-18T11:54:29Z","src":"10.10.1.5","dst":"10.10.1.12","srcScope":"stflowlogsapp01","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":445,"action":"A","direction":"O","rule":"DefaultRule_AllowVnetInBound","flows":1,"packets":67,"bytes":35302},{"first":"2026-10-18T11:33:19Z","last":"2026-10-18T11:33:19Z","src":"10.10.1.7","dst":"10.10.1.16","srcScope":"stflowlogsapp01","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":445,"action":"A","direction":"O","rule":"DefaultRule_AllowVnetInBound","flows":1,"packets":28,"bytes":34371},{"first":"2026-10-18T12:39:42Z","last":"2026-10-18T12:39:42Z","src":"10.10.1.12","dst":"20.190.151.1","srcScope":"stflowlogsapp01","dstScope":"internet","proto":"TCP","dstPort":443,"action":"A","direction":"O","rule":"DefaultRule_AllowInternetOutBound","flows":1,"packets":139,"bytes":34317},{"first":"2026-10-18T10:21:50Z","last":"2026-10-18T10:21:50Z","src":"10.10.1.18","dst":"10.20.2.8","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":28,"bytes":33516},{"first":"2026-10-18T12:40:51Z","last":"2026-10-18T12:48:05Z","src":"10.10.1.8","dst":"10.20.2.11","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":1433,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":2,"packets":169,"bytes":33109},{"first":"2026-10-18T12:32:50Z","last":"2026-10-18T12:32:50Z","src":"10.10.1.6","dst":"10.20.2.6","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":52,"bytes":31762},{"first":"2026-10-18T10:08:57Z","last":"2026-10-18T10:08:57Z","src":"10.10.1.13","dst":"10.10.1.5","srcScope":"stflowlogsapp01","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":445,"action":"A","direction":"O","rule":"DefaultRule_AllowVnetInBound","flows":1,"packets":81,"bytes":31347},{"first":"2026-10-18T11:34:43Z","last":"2026-10-18T11:34:43Z","src":"10.10.1.10","dst":"10.20.2.8","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":33,"bytes":31053},{"first":"2026-10-18T11:40:29Z","last":"2026-10-18T11:40:29Z","src":"10.10.1.14","dst":"10.20.2.8","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":1433,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":132,"bytes":29172},{"first":"2026-10-18T11:16:27Z","last":"2026-10-18T11:16:27Z","src":"10.10.1.19","dst":"10.20.2.7","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":72,"bytes":27648},{"first":"2026-10-18T11:32:03Z","last":"2026-10-18T11:32:03Z","src":"10.10.1.14","dst":"10.20.2.6","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":21,"bytes":27594},{"first":"2026-10-18T11:39:54Z","last":"2026-10-18T12:42:25Z","src":"10.10.1.4","dst":"13.107.42.14","srcScope":"stflowlogsapp01","dstScope":"internet","proto":"TCP","dstPort":443,"action":"A","direction":"O","rule":"DefaultRule_AllowInternetOutBound","flows":2,"packets":58,"bytes":26778},{"first":"2026-10-18T12:12:04Z","last":"2026-10-18T12:12:04Z","src":"10.10.1.9","dst":"13.107.42.14","srcScope":"stflowlogsapp01","dstScope":"internet","proto":"TCP","dstPort":443,"action":"A","direction":"O","rule":"DefaultRule_AllowInternetOutBound","flows":1,"packets":69,"bytes":26496},{"first":"2026-10-18T11:03:12Z","last":"2026-10-18T11:03:12Z","src":"10.10.1.9","dst":"10.20.2.5","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":54,"bytes":25866},{"first":"2026-10-18T12:08:47Z","last":"2026-10-18T12:08:47Z","src":"10.10.1.7","dst":"10.10.1.12","srcScope":"stflowlogsapp01","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":445,"action":"A","direction":"O","rule":"DefaultRule_AllowVnetInBound","flows":1,"packets":81,"bytes":25191},{"first":"2026-10-18T12:02:55Z","last":"2026-10-18T12:02:55Z","src":"10.10.1.13","dst":"10.10.1.15","srcScope":"stflowlogsapp01","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":445,"action":"A","direction":"O","rule":"DefaultRule_AllowVnetInBound","flows":1,"packets":18,"bytes":24318},{"first":"2026-10-18T11:40:02Z","last":"2026-10-18T11:40:02Z","src":"10.10.1.9","dst":"10.20.2.11","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":1433,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":78,"bytes":22386},{"first":"2026-10-18T12:29:21Z","last":"2026-10-18T12:29:21Z","src":"10.10.1.13","dst":"10.10.1.9","srcScope":"stflowlogsapp01","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":445,"action":"A","direction":"O","rule":"DefaultRule_AllowVnetInBound","flows":1,"packets":142,"bytes":21945},{"first":"2026-10-18T11:10:12Z","last":"2026-10-18T11:10:12Z","src":"10.10.1.9","dst":"10.20.2.10","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":138,"bytes":21942},{"first":"2026-10-18T12:21:55Z","last":"2026-10-18T12:21:55Z","src":"10.10.1.10","dst":"104.46.162.5","srcScope":"stflowlogsapp01","dstScope":"internet","proto":"TCP","dstPort":443,"action":"A","direction":"O","rule":"DefaultRule_AllowInternetOutBound","flows":1,"packets":19,"bytes":20631},{"first":"2026-10-18T11:59:02Z","last":"2026-10-18T11:59:02Z","src":"10.10.1.12","dst":"10.10.1.4","srcScope":"stflowlogsapp01","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":445,"action":"A","direction":"O","rule":"DefaultRule_AllowVnetInBound","flows":1,"packets":40,"bytes":20533},{"first":"2026-10-18T10:03:54Z","last":"2026-10-18T11:24:18Z","src":"10.10.1.4","dst":"10.20.2.8","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":1433,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":2,"packets":70,"bytes":19812},{"first":"2026-10-18T11:24:47Z","last":"2026-10-18T11:24:47Z","src":"10.10.1.9","dst":"10.20.2.9","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":1433,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":91,"bytes":17568},{"first":"2026-10-18T12:45:46Z","last":"2026-10-18T12:45:46Z","src":"13.107.42.14","dst":"10.10.1.13","srcScope":"internet","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":443,"action":"A","direction":"I","rule":"UserRule_AllowWebIn","flows":1,"packets":24,"bytes":16800},{"first":"2026-10-18T10:27:23Z","last":"2026-10-18T10:27:23Z","src":"10.10.1.14","dst":"104.46.162.5","srcScope":"stflowlogsapp01","dstScope":"internet","proto":"TCP","dstPort":443,"action":"A","direction":"O","rule":"DefaultRule_AllowInternetOutBound","flows":1,"packets":66,"bytes":16764},{"first":"2026-10-18T12:26:59Z","last":"2026-10-18T12:26:59Z","src":"10.10.1.11","dst":"10.10.1.17","srcScope":"stflowlogsapp01","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":445,"action":"A","direction":"O","rule":"DefaultRule_AllowVnetInBound","flows":1,"packets":64,"bytes":16576},{"first":"2026-10-18T11:13:11Z","last":"2026-10-18T11:13:11Z","src":"10.10.1.6","dst":"52.96.0.1","srcScope":"stflowlogsapp01","dstScope":"internet","proto":"TCP","dstPort":443,"action":"A","direction":"O","rule":"DefaultRule_AllowInternetOutBound","flows":1,"packets":76,"bytes":16218},{"first":"2026-10-18T12:18:38Z","last":"2026-10-18T12:18:38Z","src":"10.10.1.16","dst":"52.96.0.1","srcScope":"stflowlogsapp01","dstScope":"internet","proto":"TCP","dstPort":443,"action":"A","direction":"O","rule":"DefaultRule_AllowInternetOutBound","flows":1,"packets":40,"bytes":16159},{"first":"2026-10-18T11:34:41Z","last":"2026-10-18T11:34:41Z","src":"10.10.1.4","dst":"10.20.2.4","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":1433,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":19,"bytes":15249},{"first":"2026-10-18T12:26:32Z","last":"2026-10-18T12:26:32Z","src":"104.46.162.5","dst":"10.10.1.15","srcScope":"internet","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":443,"action":"A","direction":"I","rule":"UserRule_AllowWebIn","flows":1,"packets":16,"bytes":14800},{"first":"2026-10-18T11:32:37Z","last":"2026-10-18T11:32:37Z","src":"10.10.1.8","dst":"13.107.42.14","srcScope":"stflowlogsapp01","dstScope":"internet","proto":"TCP","dstPort":443,"action":"A","direction":"O","rule":"DefaultRule_AllowInternetOutBound","flows":1,"packets":55,"bytes":14041},{"first":"2026-10-18T12:51:41Z","last":"2026-10-18T12:51:41Z","src":"40.112.72.205","dst":"10.10.1.9","srcScope":"internet","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":443,"action":"A","direction":"I","rule":"UserRule_AllowWebIn","flows":1,"packets":165,"bytes":14025},{"first":"2026-10-18T12:33:25Z","last":"2026-10-18T12:33:25Z","src":"10.10.1.4","dst":"10.20.2.5","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":1433,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":85,"bytes":14022},{"first":"2026-10-18T12:47:15Z","last":"2026-10-18T12:47:15Z","src":"10.10.1.15","dst":"10.10.1.4","srcScope":"stflowlogsapp01","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":445,"action":"A","direction":"O","rule":"DefaultRule_AllowVnetInBound","flows":1,"packets":73,"bytes":13450},{"first":"2026-10-18T10:38:30Z","last":"2026-10-18T10:38:30Z","src":"10.10.1.19","dst":"10.10.1.12","srcScope":"stflowlogsapp01","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":445,"action":"A","direction":"O","rule":"DefaultRule_AllowVnetInBound","flows":1,"packets":100,"bytes":11155},{"first":"2026-10-18T12:33:27Z","last":"2026-10-18T12:33:27Z","src":"10.10.1.18","dst":"10.20.2.10","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":78,"bytes":10920},{"first":"2026-10-18T11:32:57Z","last":"2026-10-18T11:32:57Z","src":"104.46.162.5","dst":"10.10.1.10","srcScope":"internet","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":443,"action":"A","direction":"I","rule":"UserRule_AllowWebIn","flows":1,"packets":75,"bytes":9675},{"first":"2026-10-18T10:44:16Z","last":"2026-10-18T10:44:16Z","src":"10.10.1.19","dst":"10.20.2.9","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":19,"bytes":8931},{"first":"2026-10-18T11:00:46Z","last":"2026-10-18T11:00:46Z","src":"10.10.1.14","dst":"10.20.2.7","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":1433,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":6,"bytes":8052},{"first":"2026-10-18T10:41:55Z","last":"2026-10-18T12:22:04Z","src":"10.10.1.13","dst":"10.20.2.5","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":1433,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":2,"packets":88,"bytes":7653},{"first":"2026-10-18T12:41:51Z","last":"2026-10-18T12:41:51Z","src":"10.10.1.5","dst":"10.20.2.9","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":66,"bytes":6798},{"first":"2026-10-18T10:08:34Z","last":"2026-10-18T10:08:34Z","src":"20.190.151.1","dst":"10.10.1.13","srcScope":"internet","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":443,"action":"A","direction":"I","rule":"UserRule_AllowWebIn","flows":1,"packets":6,"bytes":5574},{"first":"2026-10-18T10:35:14Z","last":"2026-10-18T11:01:29Z","src":"10.10.1.14","dst":"10.20.2.6","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":1433,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":2,"packets":37,"bytes":5367},{"first":"2026-10-18T11:41:24Z","last":"2026-10-18T11:41:24Z","src":"10.10.1.10","dst":"40.112.72.205","srcScope":"stflowlogsapp01","dstScope":"internet","proto":"TCP","dstPort":443,"action":"A","direction":"O","rule":"DefaultRule_AllowInternetOutBound","flows":1,"packets":22,"bytes":4972},{"first":"2026-10-18T12:16:24Z","last":"2026-10-18T12:16:24Z","src":"10.10.1.5","dst":"10.10.1.17","srcScope":"stflowlogsapp01","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":445,"action":"A","direction":"O","rule":"DefaultRule_AllowVnetInBound","flows":1,"packets":60,"bytes":4260},{"first":"2026-10-18T12:07:10Z","last":"2026-10-18T12:07:10Z","src":"10.10.1.11","dst":"10.20.2.9","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":16,"bytes":3696},{"first":"2026-10-18T12:22:10Z","last":"2026-10-18T12:22:10Z","src":"10.10.1.7","dst":"10.20.2.10","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":15,"bytes":2175},{"first":"2026-10-18T12:23:35Z","last":"2026-10-18T12:23:35Z","src":"10.10.1.18","dst":"13.107.42.14","srcScope":"stflowlogsapp01","dstScope":"internet","proto":"TCP","dstPort":443,"action":"A","direction":"O","rule":"DefaultRule_AllowInternetOutBound","flows":1,"packets":4,"bytes":1800},{"first":"2026-10-18T10:55:42Z","last":"2026-10-18T10:55:42Z","src":"10.10.1.10","dst":"10.20.2.7","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":1433,"action":"A","direction":"O","rule":"UserRule_AllowSqlToData","flows":1,"packets":1,"bytes":375},{"first":"2026-10-18T12:49:00Z","last":"2026-10-18T12:49:00Z","src":"13.107.42.14","dst":"10.10.1.7","srcScope":"internet","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":443,"action":"A","direction":"I","rule":"UserRule_AllowWebIn","flows":1,"packets":1,"bytes":169},{"first":"2026-10-18T10:35:37Z","last":"2026-10-18T12:27:29Z","src":"10.30.0.5","dst":"10.10.1.7","srcScope":"vnet:vnet-hub","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":22,"action":"D","direction":"I","rule":"UserRule_DenySshFromHub","flows":3,"packets":0,"bytes":0},{"first":"2026-10-18T10:13:49Z","last":"2026-10-18T12:15:25Z","src":"10.10.1.12","dst":"10.20.2.4","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"D","direction":"I","rule":"UserRule_DenyAppPort8080","flows":2,"packets":0,"bytes":0},{"first":"2026-10-18T10:41:38Z","last":"2026-10-18T10:42:07Z","src":"10.10.1.7","dst":"10.20.2.9","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"D","direction":"I","rule":"UserRule_DenyAppPort8080","flows":2,"packets":0,"bytes":0},{"first":"2026-10-18T11:41:32Z","last":"2026-10-18T12:14:49Z","src":"10.10.1.8","dst":"10.20.2.10","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"D","direction":"I","rule":"UserRule_DenyAppPort8080","flows":2,"packets":0,"bytes":0},{"first":"2026-10-18T10:15:55Z","last":"2026-10-18T10:41:27Z","src":"10.30.0.4","dst":"10.10.1.16","srcScope":"vnet:vnet-hub","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":22,"action":"D","direction":"I","rule":"UserRule_DenySshFromHub","flows":2,"packets":0,"bytes":0},{"first":"2026-10-18T11:34:43Z","last":"2026-10-18T11:34:43Z","src":"10.10.1.10","dst":"10.20.2.8","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"D","direction":"I","rule":"UserRule_DenyAppPort8080","flows":1,"packets":0,"bytes":0},{"first":"2026-10-18T11:18:07Z","last":"2026-10-18T11:18:07Z","src":"10.10.1.11","dst":"10.20.2.4","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"D","direction":"I","rule":"UserRule_DenyAppPort8080","flows":1,"packets":0,"bytes":0},{"first":"2026-10-18T12:07:10Z","last":"2026-10-18T12:07:10Z","src":"10.10.1.11","dst":"10.20.2.9","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"D","direction":"I","rule":"UserRule_DenyAppPort8080","flows":1,"packets":0,"bytes":0},{"first":"2026-10-18T10:05:44Z","last":"2026-10-18T10:05:44Z","src":"10.10.1.12","dst":"10.20.2.6","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"D","direction":"I","rule":"UserRule_DenyAppPort8080","flows":1,"packets":0,"bytes":0},{"first":"2026-10-18T10:53:56Z","last":"2026-10-18T10:53:56Z","src":"10.10.1.12","dst":"10.20.2.9","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"D","direction":"I","rule":"UserRule_DenyAppPort8080","flows":1,"packets":0,"bytes":0},{"first":"2026-10-18T12:27:23Z","last":"2026-10-18T12:27:23Z","src":"10.10.1.13","dst":"10.20.2.10","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"D","direction":"I","rule":"UserRule_DenyAppPort8080","flows":1,"packets":0,"bytes":0},{"first":"2026-10-18T11:18:02Z","last":"2026-10-18T11:18:02Z","src":"10.10.1.13","dst":"10.20.2.7","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"D","direction":"I","rule":"UserRule_DenyAppPort8080","flows":1,"packets":0,"bytes":0},{"first":"2026-10-18T11:32:03Z","last":"2026-10-18T11:32:03Z","src":"10.10.1.14","dst":"10.20.2.6","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"D","direction":"I","rule":"UserRule_DenyAppPort8080","flows":1,"packets":0,"bytes":0},{"first":"2026-10-18T12:33:25Z","last":"2026-10-18T12:33:25Z","src":"10.10.1.14","dst":"10.20.2.7","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"D","direction":"I","rule":"UserRule_DenyAppPort8080","flows":1,"packets":0,"bytes":0},{"first":"2026-10-18T10:26:33Z","last":"2026-10-18T10:26:33Z","src":"10.10.1.15","dst":"10.20.2.4","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"D","direction":"I","rule":"UserRule_DenyAppPort8080","flows":1,"packets":0,"bytes":0},{"first":"2026-10-18T10:35:09Z","last":"2026-10-18T10:35:09Z","src":"10.10.1.15","dst":"10.20.2.5","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"D","direction":"I","rule":"UserRule_DenyAppPort8080","flows":1,"packets":0,"bytes":0},{"first":"2026-10-18T10:26:09Z","last":"2026-10-18T10:26:09Z","src":"10.10.1.15","dst":"10.20.2.6","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"D","direction":"I","rule":"UserRule_DenyAppPort8080","flows":1,"packets":0,"bytes":0},{"first":"2026-10-18T11:35:53Z","last":"2026-10-18T11:35:53Z","src":"10.10.1.17","dst":"10.20.2.10","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"D","direction":"I","rule":"UserRule_DenyAppPort8080","flows":1,"packets":0,"bytes":0},{"first":"2026-10-18T12:33:27Z","last":"2026-10-18T12:33:27Z","src":"10.10.1.18","dst":"10.20.2.10","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"D","direction":"I","rule":"UserRule_DenyAppPort8080","flows":1,"packets":0,"bytes":0},{"first":"2026-10-18T11:23:38Z","last":"2026-10-18T11:23:38Z","src":"10.10.1.18","dst":"10.20.2.11","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"D","direction":"I","rule":"UserRule_DenyAppPort8080","flows":1,"packets":0,"bytes":0},{"first":"2026-10-18T10:21:50Z","last":"2026-10-18T10:21:50Z","src":"10.10.1.18","dst":"10.20.2.8","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"D","direction":"I","rule":"UserRule_DenyAppPort8080","flows":1,"packets":0,"bytes":0},{"first":"2026-10-18T11:16:27Z","last":"2026-10-18T11:16:27Z","src":"10.10.1.19","dst":"10.20.2.7","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"D","direction":"I","rule":"UserRule_DenyAppPort8080","flows":1,"packets":0,"bytes":0},{"first":"2026-10-18T10:44:16Z","last":"2026-10-18T10:44:16Z","src":"10.10.1.19","dst":"10.20.2.9","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"D","direction":"I","rule":"UserRule_DenyAppPort8080","flows":1,"packets":0,"bytes":0},{"first":"2026-10-18T12:41:51Z","last":"2026-10-18T12:41:51Z","src":"10.10.1.5","dst":"10.20.2.9","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"D","direction":"I","rule":"UserRule_DenyAppPort8080","flows":1,"packets":0,"bytes":0},{"first":"2026-10-18T12:32:50Z","last":"2026-10-18T12:32:50Z","src":"10.10.1.6","dst":"10.20.2.6","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"D","direction":"I","rule":"UserRule_DenyAppPort8080","flows":1,"packets":0,"bytes":0},{"first":"2026-10-18T12:22:10Z","last":"2026-10-18T12:22:10Z","src":"10.10.1.7","dst":"10.20.2.10","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"D","direction":"I","rule":"UserRule_DenyAppPort8080","flows":1,"packets":0,"bytes":0},{"first":"2026-10-18T10:08:07Z","last":"2026-10-18T10:08:07Z","src":"10.10.1.7","dst":"10.20.2.7","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"D","direction":"I","rule":"UserRule_DenyAppPort8080","flows":1,"packets":0,"bytes":0},{"first":"2026-10-18T11:10:12Z","last":"2026-10-18T11:10:12Z","src":"10.10.1.9","dst":"10.20.2.10","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"D","direction":"I","rule":"UserRule_DenyAppPort8080","flows":1,"packets":0,"bytes":0},{"first":"2026-10-18T11:03:12Z","last":"2026-10-18T11:03:12Z","src":"10.10.1.9","dst":"10.20.2.5","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"D","direction":"I","rule":"UserRule_DenyAppPort8080","flows":1,"packets":0,"bytes":0},{"first":"2026-10-18T10:53:53Z","last":"2026-10-18T10:53:53Z","src":"10.10.1.9","dst":"10.20.2.6","srcScope":"stflowlogsapp01","dstScope":"stflowlogsdata02","proto":"TCP","dstPort":8080,"action":"D","direction":"I","rule":"UserRule_DenyAppPort8080","flows":1,"packets":0,"bytes":0},{"first":"2026-10-18T11:31:27Z","last":"2026-10-18T11:31:27Z","src":"10.30.0.4","dst":"10.10.1.7","srcScope":"vnet:vnet-hub","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":22,"action":"D","direction":"I","rule":"UserRule_DenySshFromHub","flows":1,"packets":0,"bytes":0},{"first":"2026-10-18T12:50:20Z","last":"2026-10-18T12:50:20Z","src":"10.30.0.5","dst":"10.10.1.15","srcScope":"vnet:vnet-hub","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":22,"action":"D","direction":"I","rule":"UserRule_DenySshFromHub","flows":1,"packets":0,"bytes":0},{"first":"2026-10-18T12:45:22Z","last":"2026-10-18T12:45:22Z","src":"10.30.0.5","dst":"10.10.1.19","srcScope":"vnet:vnet-hub","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":22,"action":"D","direction":"I","rule":"UserRule_DenySshFromHub","flows":1,"packets":0,"bytes":0},{"first":"2026-10-18T10:12:44Z","last":"2026-10-18T10:12:44Z","src":"10.30.0.5","dst":"10.10.1.8","srcScope":"vnet:vnet-hub","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":22,"action":"D","direction":"I","rule":"UserRule_DenySshFromHub","flows":1,"packets":0,"bytes":0},{"first":"2026-10-18T12:03:23Z","last":"2026-10-18T12:03:23Z","src":"10.30.0.6","dst":"10.10.1.13","srcScope":"vnet:vnet-hub","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":22,"action":"D","direction":"I","rule":"UserRule_DenySshFromHub","flows":1,"packets":0,"bytes":0},{"first":"2026-10-18T10:27:26Z","last":"2026-10-18T10:27:26Z","src":"10.30.0.6","dst":"10.10.1.19","srcScope":"vnet:vnet-hub","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":22,"action":"D","direction":"I","rule":"UserRule_DenySshFromHub","flows":1,"packets":0,"bytes":0},{"first":"2026-10-18T10:57:56Z","last":"2026-10-18T10:57:56Z","src":"10.30.0.6","dst":"10.10.1.5","srcScope":"vnet:vnet-hub","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":22,"action":"D","direction":"I","rule":"UserRule_DenySshFromHub","flows":1,"packets":0,"bytes":0},{"first":"2026-10-18T10:18:19Z","last":"2026-10-18T10:18:19Z","src":"10.30.0.6","dst":"10.10.1.8","srcScope":"vnet:vnet-hub","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":22,"action":"D","direction":"I","rule":"UserRule_DenySshFromHub","flows":1,"packets":0,"bytes":0},{"first":"2026-10-18T10:24:29Z","last":"2026-10-18T10:24:29Z","src":"10.30.0.7","dst":"10.10.1.15","srcScope":"vnet:vnet-hub","dstScope":"stflowlogsapp01","proto":"TCP","dstPort":22,"action":"D","direction":"I","rule":"UserRule_DenySshFromHub","flows":1,"packets":0,"bytes":0}],"accounts":[],"flowLogs":[],"notes":["Counts are flow log observations: one per NSG or VNet flow tuple. A flow crossing two logged networks is observed at both; the duplicate allowed inbound observation is skipped.","Offline topology from topology.json: 3 network(s), 3 prefix(es).","Filters apply per observation: port matches destination port; IP matches source or destination text."]}</script>
+<script>
+(function () {
+  "use strict";
+
+  var DATA = JSON.parse(document.getElementById("flowlog-data").textContent);
+  var MAX_GRAPH_EDGES = 40;
+  var PAGE_SIZE = 100;
+
+  var scopes = {};
+  DATA.scopes.forEach(function (s) { scopes[s.id] = s; });
+
+  var state = {
+    focus: "", action: "all", protocol: "all", ports: "", ip: "", minBytes: 0,
+    page: 0,
+    edgeSort: { key: "bytes", dir: -1 },
+    flowSort: { key: "bytes", dir: -1 }
+  };
+
+  var $ = function (id) { return document.getElementById(id); };
+
+  function esc(value) {
+    return String(value === null || value === undefined ? "" : value)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+
+  function num(value) { return Number(value || 0).toLocaleString(); }
+
+  function bytes(value) {
+    var n = Number(value || 0);
+    var units = ["B", "KB", "MB", "GB", "TB"];
+    var i = 0;
+    while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+    return i === 0 ? num(value) + " B" : n.toFixed(1) + " " + units[i];
+  }
+
+  function shortTime(iso) {
+    return iso ? String(iso).replace("T", " ").replace("Z", "") : "-";
+  }
+
+  function label(id) {
+    var s = scopes[id];
+    return s ? s.label : id;
+  }
+
+  function parsePorts(text) {
+    var ranges = [];
+    String(text || "").split(",").forEach(function (part) {
+      var t = part.trim();
+      if (!t) return;
+      var bounds = t.split("-").map(function (x) { return x.trim(); });
+      var low = parseInt(bounds[0], 10);
+      var high = parseInt(bounds[bounds.length - 1], 10);
+      if (bounds.length > 2 || !/^\d+$/.test(bounds[0]) || !/^\d+$/.test(bounds[bounds.length - 1]) || low > high || high > 65535) {
+        throw new Error("Invalid port filter: " + t);
+      }
+      ranges.push([low, high]);
+    });
+    return ranges;
+  }
+
+  function matchingRows() {
+    var ranges = [];
+    var warning = "";
+    try { ranges = parsePorts(state.ports); } catch (e) { warning = e.message + " (port filter ignored)"; }
+    $("f-warn").textContent = warning;
+
+    var ip = state.ip.toLowerCase();
+    return DATA.flows.filter(function (f) {
+      if (state.action === "allow" && f.action !== "A") return false;
+      if (state.action === "deny" && f.action !== "D") return false;
+      if (state.protocol !== "all" && f.proto !== state.protocol) return false;
+      if (ranges.length && !ranges.some(function (r) { return f.dstPort >= r[0] && f.dstPort <= r[1]; })) return false;
+      if (ip && f.src.toLowerCase().indexOf(ip) < 0 && f.dst.toLowerCase().indexOf(ip) < 0) return false;
+      if (f.bytes < state.minBytes) return false;
+      if (state.focus && f.srcScope !== state.focus && f.dstScope !== state.focus) return false;
+      return true;
+    });
+  }
+
+  function buildEdges(rows) {
+    var map = {};
+    rows.forEach(function (f) {
+      var key = f.srcScope + "\u0001" + f.dstScope;
+      var e = map[key] || (map[key] = { src: f.srcScope, dst: f.dstScope, flows: 0, allowed: 0, denied: 0, bytes: 0 });
+      e.flows += f.flows;
+      e.bytes += f.bytes;
+      if (f.action === "A") e.allowed += f.flows;
+      if (f.action === "D") e.denied += f.flows;
+    });
+    return Object.keys(map).map(function (k) { return map[k]; });
+  }
+
+  function totals(rows) {
+    var t = { flows: 0, allowed: 0, denied: 0, bytes: 0, scopes: {} };
+    rows.forEach(function (f) {
+      t.flows += f.flows;
+      t.bytes += f.bytes;
+      if (f.action === "A") t.allowed += f.flows;
+      if (f.action === "D") t.denied += f.flows;
+      t.scopes[f.srcScope] = true;
+      t.scopes[f.dstScope] = true;
+    });
+    t.scopeCount = Object.keys(t.scopes).length;
+    return t;
+  }
+
+  function sortBy(list, sort, valueOf) {
+    return list.slice().sort(function (a, b) {
+      var x = valueOf(a, sort.key), y = valueOf(b, sort.key);
+      if (x < y) return -1 * sort.dir;
+      if (x > y) return 1 * sort.dir;
+      return 0;
+    });
+  }
+
+  function header(tableId, columns, sort, onSort) {
+    var tr = document.querySelector("#" + tableId + " thead tr");
+    tr.innerHTML = columns.map(function (c) {
+      var arrow = sort.key === c.key ? (sort.dir > 0 ? " ▲" : " ▼") : "";
+      return '<th scope="col" class="' + (c.num ? "num" : "") + '"><button type="button" class="sort" data-key="' + esc(c.key) + '">' + esc(c.title) + arrow + "</button></th>";
+    }).join("");
+    tr.querySelectorAll("button.sort").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var key = b.getAttribute("data-key");
+        if (sort.key === key) { sort.dir = -sort.dir; } else { sort.key = key; sort.dir = c.num ? -1 : 1; }
+        onSort();
+      });
+    });
+  }
+
+  function renderCards(rows, t) {
+    var s = DATA.summary;
+    var cards = [
+      { label: "Flow observations", value: num(t.flows), sub: "matching filters" },
+      { label: "Allowed / denied", value: num(t.allowed) + " / " + num(t.denied), sub: "matching filters" },
+      { label: "Bytes", value: bytes(t.bytes), sub: "matching filters" },
+      { label: "Scopes", value: num(t.scopeCount), sub: num(s.storageAccounts) + " storage accounts read" },
+      { label: "Report total", value: num(s.flows), sub: s.rowsTruncated ? "rows truncated" : "all rows embedded" }
+    ];
+    $("cards").innerHTML = cards.map(function (c) {
+      return '<div class="stat"><div class="label">' + esc(c.label) + '</div><div class="value">' + esc(c.value) + '</div><div class="sub">' + esc(c.sub) + "</div></div>";
+    }).join("");
+  }
+
+  function renderGraph(edges) {
+    var svg = $("graph");
+    var top = sortBy(edges, { key: "bytes", dir: -1 }, function (e) { return e.bytes; }).slice(0, MAX_GRAPH_EDGES);
+    var nodeBytes = {};
+    top.forEach(function (e) {
+      nodeBytes[e.src] = (nodeBytes[e.src] || 0) + e.bytes;
+      nodeBytes[e.dst] = (nodeBytes[e.dst] || 0) + e.bytes;
+    });
+    var ids = Object.keys(nodeBytes).sort(function (a, b) { return nodeBytes[b] - nodeBytes[a] || (a < b ? -1 : 1); });
+
+    if (ids.length === 0) {
+      svg.innerHTML = '<text x="320" y="260" text-anchor="middle">No traffic matches the current filters.</text>';
+      $("graph-hint").textContent = "";
+      return;
+    }
+
+    var cx = 320, cy = 260, radius = ids.length === 1 ? 0 : 190;
+    var pos = {};
+    ids.forEach(function (id, i) {
+      var angle = -Math.PI / 2 + (2 * Math.PI * i) / ids.length;
+      pos[id] = { x: cx + radius * Math.cos(angle), y: cy + radius * Math.sin(angle) };
+    });
+    var maxBytes = Math.max.apply(null, top.map(function (e) { return e.bytes; })) || 1;
+    var maxNode = Math.max.apply(null, ids.map(function (id) { return nodeBytes[id]; })) || 1;
+
+    var parts = ['<defs>'];
+    parts.push('<marker id="arr-allow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/></marker>');
+    parts.push('<marker id="arr-deny" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--danger)"/></marker>');
+    parts.push("</defs>");
+
+    top.forEach(function (e) {
+      var a = pos[e.src], b = pos[e.dst];
+      var width = (1.2 + 9 * Math.sqrt(e.bytes / maxBytes)).toFixed(2);
+      var denied = e.flows > 0 && e.denied / e.flows > 0.5;
+      var cls = denied ? "deny" : "allow";
+      var title = esc(label(e.src) + " → " + label(e.dst) + ": " + num(e.flows) + " flows, " + num(e.allowed) + " allowed, " + num(e.denied) + " denied, " + bytes(e.bytes));
+      if (e.src === e.dst) {
+        // Loop sits on the side of the node facing away from the graph centre so it stays inside the viewBox.
+        var ux = a.x - cx, uy = a.y - cy, ul = Math.sqrt(ux * ux + uy * uy) || 1;
+        ux /= ul; uy /= ul;
+        var px = -uy, py = ux;
+        var sx = a.x + ux * 24, sy = a.y + uy * 24;
+        var c1x = a.x + ux * 70 + px * 34, c1y = a.y + uy * 70 + py * 34;
+        var c2x = a.x + ux * 70 - px * 34, c2y = a.y + uy * 70 - py * 34;
+        var ex = a.x + ux * 24 + px * 10, ey = a.y + uy * 24 + py * 10;
+        parts.push('<path class="edge ' + cls + '" stroke-width="' + width + '" d="M' + sx.toFixed(1) + "," + sy.toFixed(1) + " C" + c1x.toFixed(1) + "," + c1y.toFixed(1) + " " + c2x.toFixed(1) + "," + c2y.toFixed(1) + " " + ex.toFixed(1) + "," + ey.toFixed(1) + '" marker-end="url(#arr-' + cls + ')"><title>' + title + "</title></path>");
+        return;
+      }
+      var dx = b.x - a.x, dy = b.y - a.y, len = Math.sqrt(dx * dx + dy * dy) || 1;
+      var nx = -dy / len, ny = dx / len;
+      var side = e.src < e.dst ? 1 : -1;
+      var mx = (a.x + b.x) / 2 + nx * 22 * side, my = (a.y + b.y) / 2 + ny * 22 * side;
+      var shrink = 30 / len;
+      var x1 = a.x + dx * shrink, y1 = a.y + dy * shrink;
+      var x2 = b.x - dx * shrink, y2 = b.y - dy * shrink;
+      parts.push('<path class="edge ' + cls + '" stroke-width="' + width + '" d="M' + x1.toFixed(1) + "," + y1.toFixed(1) + " Q" + mx.toFixed(1) + "," + my.toFixed(1) + " " + x2.toFixed(1) + "," + y2.toFixed(1) + '" marker-end="url(#arr-' + cls + ')"><title>' + title + "</title></path>");
+    });
+
+    ids.forEach(function (id) {
+      var p = pos[id];
+      var s = scopes[id] || { kind: "unmapped", label: id };
+      var r = 22 + 12 * Math.sqrt(nodeBytes[id] / maxNode);
+      var focused = state.focus === id ? " focused" : "";
+      parts.push('<g class="node-group" data-id="' + esc(id) + '" role="button" tabindex="0" aria-label="' + esc(s.label) + '">');
+      parts.push('<circle class="node kind-' + esc(s.kind) + focused + '" cx="' + p.x.toFixed(1) + '" cy="' + p.y.toFixed(1) + '" r="' + r.toFixed(1) + '"><title>' + esc(s.label) + " (" + esc(s.kind) + ") - " + bytes(nodeBytes[id]) + "</title></circle>");
+      parts.push('<text text-anchor="middle" x="' + p.x.toFixed(1) + '" y="' + (p.y + 4).toFixed(1) + '">' + esc(shorten(s.label, 16)) + "</text>");
+      parts.push("</g>");
+    });
+
+    svg.innerHTML = parts.join("");
+    svg.querySelectorAll(".node-group").forEach(function (g) {
+      var pick = function () { setFocus(g.getAttribute("data-id") === state.focus ? "" : g.getAttribute("data-id")); };
+      g.addEventListener("click", pick);
+      g.addEventListener("keydown", function (ev) { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); pick(); } });
+    });
+
+    $("graph-hint").textContent = "Showing " + top.length + " of " + edges.length + " scope pairs (largest by bytes). Click a node to focus it. Width = bytes; red = mostly denied.";
+  }
+
+  function shorten(text, max) {
+    text = String(text);
+    return text.length > max ? text.slice(0, max - 1) + "…" : text;
+  }
+
+  function renderEdges(edges) {
+    var columns = [
+      { key: "label", title: "From", value: function (e) { return label(e.src); } },
+      { key: "dst", title: "To", value: function (e) { return label(e.dst); } },
+      { key: "flows", title: "Flows", num: true, value: function (e) { return e.flows; } },
+      { key: "allowed", title: "Allowed", num: true, value: function (e) { return e.allowed; } },
+      { key: "denied", title: "Denied", num: true, value: function (e) { return e.denied; } },
+      { key: "bytes", title: "Bytes", num: true, value: function (e) { return e.bytes; } }
+    ];
+    var rerender = function () { renderEdges(edges); };
+    header("edges", columns, state.edgeSort, rerender);
+
+    var sorted = sortBy(edges, state.edgeSort, function (e, key) {
+      var c = columns.filter(function (x) { return x.key === key; })[0];
+      return c ? c.value(e) : 0;
+    });
+    var maxBytes = Math.max.apply(null, sorted.map(function (e) { return e.bytes; }).concat([1]));
+    var body = sorted.slice(0, 500).map(function (e) {
+      return '<tr class="clickable" data-src="' + esc(e.src) + '" data-dst="' + esc(e.dst) + '">' +
+        "<td>" + esc(label(e.src)) + "</td><td>" + esc(label(e.dst)) + "</td>" +
+        '<td class="num">' + num(e.flows) + '</td><td class="num">' + num(e.allowed) + '</td>' +
+        '<td class="num">' + num(e.denied) + '</td><td class="num">' + bytes(e.bytes) + "</td>" +
+        '<td><div class="bar-wrap"><div class="bar" style="width:' + (100 * e.bytes / maxBytes).toFixed(1) + '%"></div></div></td></tr>';
+    });
+    $("edges").querySelector("tbody").innerHTML = body.join("") || '<tr><td colspan="7" class="hint">No scope pairs match the filters.</td></tr>';
+    $("edges").querySelector("thead tr").insertAdjacentHTML("beforeend", "<th>Share</th>");
+    $("edges").querySelectorAll("tbody tr.clickable").forEach(function (tr) {
+      tr.addEventListener("click", function () { setFocus(tr.getAttribute("data-src")); });
+    });
+  }
+
+  function renderFlows(rows) {
+    var columns = [
+      { key: "first", title: "First seen" },
+      { key: "src", title: "Source" },
+      { key: "dst", title: "Destination" },
+      { key: "srcScope", title: "From scope" },
+      { key: "dstScope", title: "To scope" },
+      { key: "dstPort", title: "Port", num: true },
+      { key: "proto", title: "Proto" },
+      { key: "action", title: "Action" },
+      { key: "direction", title: "Dir" },
+      { key: "flows", title: "Flows", num: true },
+      { key: "bytes", title: "Bytes", num: true },
+      { key: "rule", title: "Rule" }
+    ];
+    var rerender = function () { state.page = 0; renderFlows(matchingRows()); };
+    header("flows", columns, state.flowSort, rerender);
+
+    var sorted = sortBy(rows, state.flowSort, function (f, key) {
+      if (key === "srcScope" || key === "dstScope") return label(f[key]);
+      return f[key];
+    });
+    var pages = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE));
+    state.page = Math.min(state.page, pages - 1);
+    var start = state.page * PAGE_SIZE;
+    var slice = sorted.slice(start, start + PAGE_SIZE);
+
+    $("flows").querySelector("tbody").innerHTML = slice.map(function (f) {
+      return "<tr>" +
+        '<td class="mono">' + esc(shortTime(f.first)) + "</td>" +
+        '<td class="ip mono">' + esc(f.src) + "</td>" +
+        '<td class="ip mono">' + esc(f.dst) + "</td>" +
+        "<td>" + esc(label(f.srcScope)) + "</td>" +
+        "<td>" + esc(label(f.dstScope)) + "</td>" +
+        '<td class="num">' + esc(f.dstPort) + "</td>" +
+        "<td>" + esc(f.proto) + "</td>" +
+        '<td class="' + (f.action === "A" ? "allow-t" : "deny-t") + '">' + (f.action === "A" ? "allow" : "deny") + "</td>" +
+        "<td>" + (f.direction === "I" ? "in" : "out") + "</td>" +
+        '<td class="num">' + num(f.flows) + "</td>" +
+        '<td class="num">' + bytes(f.bytes) + "</td>" +
+        '<td class="mono">' + esc(f.rule) + "</td></tr>";
+    }).join("") || '<tr><td colspan="12" class="hint">No flow rows match the filters.</td></tr>';
+
+    $("flows-count").textContent = num(rows.length) + " rows match" + (DATA.summary.rowsTruncated ? " (report embeds " + num(DATA.summary.rows) + " of " + num(DATA.summary.rowsTotal) + " rows)" : "");
+    $("p-label").textContent = (sorted.length ? (start + 1) : 0) + "-" + Math.min(start + PAGE_SIZE, sorted.length) + " of " + num(sorted.length);
+    $("p-prev").disabled = state.page === 0;
+    $("p-next").disabled = state.page >= pages - 1;
+  }
+
+  function renderFocus(rows) {
+    var panel = $("focus");
+    if (!state.focus) {
+      panel.innerHTML = '<p class="hint">Choose a scope in the filter bar or click a node or row to see its inbound and outbound traffic.</p>';
+      return;
+    }
+    var s = scopes[state.focus] || { label: state.focus, kind: "unknown" };
+    var inbound = rows.filter(function (f) { return f.dstScope === state.focus; });
+    var outbound = rows.filter(function (f) { return f.srcScope === state.focus; });
+    var sum = function (list, key) { return list.reduce(function (acc, f) { return acc + f[key]; }, 0); };
+    var top = function (list, keyOf, n) {
+      var acc = {};
+      list.forEach(function (f) { var k = keyOf(f); acc[k] = (acc[k] || 0) + f.bytes; });
+      return Object.keys(acc).sort(function (a, b) { return acc[b] - acc[a]; }).slice(0, n).map(function (k) { return k + " (" + bytes(acc[k]) + ")"; });
+    };
+    var peers = top(inbound, function (f) { return label(f.srcScope); }, 5).concat(top(outbound, function (f) { return label(f.dstScope); }, 5));
+    var ports = top(rows.filter(function (f) { return f.srcScope === state.focus || f.dstScope === state.focus; }), function (f) { return f.dstPort + "/" + f.proto; }, 5);
+    var status = s.kind === "storage" ? accountStatus(s.label) : "";
+
+    panel.innerHTML =
+      "<div><strong>" + esc(s.label) + "</strong> <span class=\"hint\">" + esc(s.kind) + (status ? " | " + esc(status) : "") + "</span></div>" +
+      "<dl>" +
+      "<dt>Inbound</dt><dd>" + num(sum(inbound, "flows")) + " flows, " + bytes(sum(inbound, "bytes")) + "</dd>" +
+      "<dt>Outbound</dt><dd>" + num(sum(outbound, "flows")) + " flows, " + bytes(sum(outbound, "bytes")) + "</dd>" +
+      "<dt>Denied</dt><dd>" + num(sum(rows.filter(function (f) { return f.action === "D" && (f.srcScope === state.focus || f.dstScope === state.focus); }), "flows")) + " observations</dd>" +
+      "</dl>" +
+      "<div class=\"hint\">Top peers</div><div>" + (peers.length ? esc(peers.join(", ")) : "none") + "</div>" +
+      "<div class=\"hint\">Top destination ports</div><div>" + (ports.length ? esc(ports.join(", ")) : "none") + "</div>" +
+      "<div><button type=\"button\" id=\"focus-clear\">Clear focus</button></div>";
+    $("focus-clear").addEventListener("click", function () { setFocus(""); });
+  }
+
+  function accountStatus(name) {
+    var a = DATA.accounts.filter(function (x) { return x.name === name; })[0];
+    return a ? a.status : "";
+  }
+
+  function renderMonitoring() {
+    $("accounts").querySelector("tbody").innerHTML = DATA.accounts.map(function (a) {
+      return "<tr><td>" + esc(a.name) + '</td><td class="mono">' + esc(a.subscriptionId) + "</td>" +
+        '<td><span class="badge s-' + esc(a.status) + '">' + esc(a.status) + "</span></td>" +
+        '<td class="num">' + esc(a.flowLogConfigs) + "</td><td>" + esc(shortTime(a.latestBlobUtc)) + "</td>" +
+        '<td class="mono">' + esc(a.observedTarget ? a.observedTarget.split("/").pop() : "-") + "</td></tr>";
+    }).join("") || '<tr><td colspan="6" class="hint">No storage account inventory in this report (local input or none discovered).</td></tr>';
+
+    $("logs").querySelector("tbody").innerHTML = DATA.flowLogs.map(function (f) {
+      return "<tr><td>" + esc(f.storageAccount) + '</td><td class="mono">' + esc(f.target.split("/").pop()) + "</td>" +
+        "<td>" + esc(f.targetKind) + "</td><td>" + (f.enabled ? "yes" : "no") + "</td>" +
+        '<td><span class="badge s-' + esc(f.status) + '">' + esc(f.status) + "</span></td>" +
+        '<td class="num">' + (f.ageHours === null || f.ageHours === undefined ? "-" : esc(f.ageHours)) + "</td>" +
+        "<td>" + esc(shortTime(f.latestBlobUtc)) + "</td><td>" + esc(f.message || "") + "</td></tr>";
+    }).join("") || '<tr><td colspan="8" class="hint">No flow log configurations in this report.</td></tr>';
+  }
+
+  function renderNotes() {
+    $("notes").innerHTML = DATA.notes.map(function (n) { return "<li>" + esc(n) + "</li>"; }).join("");
+  }
+
+  function renderMeta() {
+    var f = DATA.filters;
+    var parts = [
+      "Generated " + shortTime(DATA.generatedUtc) + " UTC",
+      "Source " + DATA.source,
+      "Window " + shortTime(DATA.window.fromUtc) + " to " + shortTime(DATA.window.toUtc) + " UTC",
+      "Report filters: action " + f.action + ", protocol " + f.protocol + ", ports " + (f.ports || "any") + ", IP " + (f.ip || "any") + ", min bytes " + num(f.minBytes)
+    ];
+    $("meta").innerHTML = parts.map(function (p) { return "<span>" + esc(p) + "</span>"; }).join("");
+    $("footer").textContent = "Self-contained report. No data leaves this file. Schema " + DATA.schema + ".";
+  }
+
+  function setFocus(id) {
+    state.focus = id || "";
+    $("f-focus").value = state.focus;
+    state.page = 0;
+    render();
+  }
+
+  function render() {
+    var rows = matchingRows();
+    var edges = buildEdges(rows);
+    var t = totals(rows);
+    renderCards(rows, t);
+    renderGraph(edges);
+    renderEdges(edges);
+    renderFlows(rows);
+    renderFocus(rows);
+    $("f-hint").textContent = num(rows.length) + " of " + num(DATA.flows.length) + " embedded rows match";
+  }
+
+  function init() {
+    renderMeta();
+    renderMonitoring();
+    renderNotes();
+
+    var focusSelect = $("f-focus");
+    DATA.scopes.slice().sort(function (a, b) { return a.label < b.label ? -1 : 1; }).forEach(function (s) {
+      var o = document.createElement("option");
+      o.value = s.id;
+      o.textContent = s.label + " (" + s.kind + ")";
+      focusSelect.appendChild(o);
+    });
+
+    var bind = function (id, key, parse) {
+      $(id).addEventListener(parse ? "change" : "input", function (ev) {
+        state[key] = parse ? parse(ev.target.value) : ev.target.value;
+        state.page = 0;
+        render();
+      });
+    };
+    bind("f-focus", "focus");
+    bind("f-action", "action");
+    bind("f-protocol", "protocol");
+    bind("f-ports", "ports");
+    bind("f-ip", "ip");
+    bind("f-bytes", "minBytes", function (v) { return Math.max(0, parseInt(v, 10) || 0); });
+    $("f-reset").addEventListener("click", function () {
+      state.focus = ""; state.action = "all"; state.protocol = "all"; state.ports = ""; state.ip = ""; state.minBytes = 0; state.page = 0;
+      $("f-focus").value = ""; $("f-action").value = "all"; $("f-protocol").value = "all";
+      $("f-ports").value = ""; $("f-ip").value = ""; $("f-bytes").value = "0";
+      render();
+    });
+    $("p-prev").addEventListener("click", function () { state.page = Math.max(0, state.page - 1); render(); });
+    $("p-next").addEventListener("click", function () { state.page += 1; render(); });
+
+    render();
+  }
+
+  init();
+})();
+</script>
+</body>
+</html>
