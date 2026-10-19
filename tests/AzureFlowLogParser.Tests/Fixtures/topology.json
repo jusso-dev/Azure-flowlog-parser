@@ -1,0 +1,7 @@
+{
+  "networks": [
+    { "name": "stflowlogs01", "kind": "storage", "prefixes": ["10.0.1.0/24"] },
+    { "name": "vnet-app", "kind": "vnet", "prefixes": ["10.0.2.0/24"] },
+    { "name": "stflowlogs02", "kind": "storage", "prefixes": ["10.0.2.10/32", "fd00::/64"] }
+  ]
+}
