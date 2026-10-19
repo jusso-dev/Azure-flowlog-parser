@@ -96,7 +96,7 @@ public class ParsingTests
             Summary = new ReportSummary { Flows = 6, RowsTotal = 4 }
         };
 
-        var json = JsonSerializer.Serialize(model, Services.Common.JsonOptions.Indented);
+        var json = JsonSerializer.Serialize(model, Serialization.AppJsonContext.Default.ReportModel);
         using var doc = JsonDocument.Parse(json);
 
         Assert.Equal(1, doc.RootElement.GetProperty("schema").GetInt32());

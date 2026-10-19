@@ -4,6 +4,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using AzureFlowLogParser.Models;
+using AzureFlowLogParser.Serialization;
 using Polly;
 using Polly.Retry;
 
@@ -170,12 +171,7 @@ public class FlowLogHttpClient : IDisposable
     private async Task<bool> PostSingleRecordAsync(DenormalizedFlowRecord record, bool verbose)
     {
         // Serialize single record to JSON (as an object, not an array)
-        var jsonOptions = new JsonSerializerOptions
-        {
-            DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
-        };
-
-        var jsonContent = JsonSerializer.Serialize(record, jsonOptions);
+        var jsonContent = JsonSerializer.Serialize(record, AppJsonContext.Default.DenormalizedFlowRecord);
         var contentBytes = Encoding.UTF8.GetBytes(jsonContent);
 
         HttpContent httpContent;

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using AzureFlowLogParser.Models;
+using AzureFlowLogParser.Serialization;
 
 namespace AzureFlowLogParser.Services.Analysis;
 
@@ -12,13 +13,13 @@ public static class TopologyFile
 {
     public sealed record Result(Ipv4Lookup Lookup, int Networks, int Prefixes, int SkippedPrefixes, IReadOnlyList<string> StorageAccounts);
 
-    private sealed class Document
+    public sealed class Document
     {
         [JsonPropertyName("networks")]
         public List<Network> Networks { get; set; } = new();
     }
 
-    private sealed class Network
+    public sealed class Network
     {
         [JsonPropertyName("name")]
         public string Name { get; set; } = string.Empty;
@@ -37,10 +38,8 @@ public static class TopologyFile
             throw new FileNotFoundException($"Topology file not found: {path}");
         }
 
-        var document = JsonSerializer.Deserialize<Document>(File.ReadAllText(path), new JsonSerializerOptions
-        {
-            PropertyNameCaseInsensitive = true
-        }) ?? throw new InvalidDataException($"Topology file is empty: {path}");
+        var document = JsonSerializer.Deserialize(File.ReadAllText(path), AppJsonContext.Default.Document)
+            ?? throw new InvalidDataException($"Topology file is empty: {path}");
 
         var lookup = new Ipv4Lookup();
         var prefixes = 0;

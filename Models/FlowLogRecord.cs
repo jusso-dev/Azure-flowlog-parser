@@ -122,19 +122,24 @@ public class DenormalizedFlowRecord
     [JsonPropertyName("deviceAction")]
     public string DeviceAction { get; set; } = string.Empty;
 
-    // Version 2+ fields
+    // Version 2+ fields, left out of the output when absent
     [JsonPropertyName("flowState")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? FlowState { get; set; }
 
     [JsonPropertyName("packetsStoD")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? PacketsStoD { get; set; }
 
     [JsonPropertyName("bytesStoD")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? BytesStoD { get; set; }
 
     [JsonPropertyName("packetsDtoS")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? PacketsDtoS { get; set; }
 
     [JsonPropertyName("bytesDtoS")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? BytesDtoS { get; set; }
 }

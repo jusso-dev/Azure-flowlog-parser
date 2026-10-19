@@ -1,6 +1,7 @@
 using System.CommandLine;
 using System.Text.Json;
 using AzureFlowLogParser.Commands;
+using AzureFlowLogParser.Serialization;
 using AzureFlowLogParser.Services;
 
 namespace AzureFlowLogParser;
@@ -691,11 +692,7 @@ class Program
         if (format.ToLower() == "jsonl")
         {
             // JSON Lines format - one JSON object per line
-            var lines = records.Select(r =>
-                JsonSerializer.Serialize(r, new JsonSerializerOptions
-                {
-                    DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
-                }));
+            var lines = records.Select(r => JsonSerializer.Serialize(r, AppJsonContext.Default.DenormalizedFlowRecord));
             outputContent = string.Join(Environment.NewLine, lines);
         }
         else

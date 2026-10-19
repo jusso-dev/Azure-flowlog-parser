@@ -178,6 +178,11 @@ public static class ReportCommand
                 }
             };
 
+            if (inputs.Length == 0 && parseResult.GetValue(topologyOption) is not null)
+            {
+                log("Warning: --topology is only used with --input; ignoring it.");
+            }
+
             if (inputs.Length > 0)
             {
                 model.Source = "local";
@@ -203,10 +208,6 @@ public static class ReportCommand
                 log($"Read {files} local file(s).");
                 aggregator.FillModel(model, subscriptionCount: 0);
                 model.Window = WindowFor(since, until, aggregator.ObservedRange, now);
-            }
-            else if (parseResult.GetValue(topologyOption) is not null)
-            {
-                log("Warning: --topology is only used with --input; ignoring it.");
             }
             else
             {

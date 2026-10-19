@@ -153,6 +153,13 @@ public sealed class TrafficAggregator
                 .ThenBy(kv => kv.Key.Src, StringComparer.Ordinal)
                 .ThenBy(kv => kv.Key.Dst, StringComparer.Ordinal)
                 .ThenBy(kv => kv.Key.DstPort)
+                // Remaining ties follow the key field order, so the output no longer depends on parallel read order.
+                .ThenBy(kv => kv.Key.SrcScope, StringComparer.Ordinal)
+                .ThenBy(kv => kv.Key.DstScope, StringComparer.Ordinal)
+                .ThenBy(kv => kv.Key.Proto, StringComparer.Ordinal)
+                .ThenBy(kv => kv.Key.Action, StringComparer.Ordinal)
+                .ThenBy(kv => kv.Key.Direction, StringComparer.Ordinal)
+                .ThenBy(kv => kv.Key.Rule, StringComparer.Ordinal)
                 .ToList();
 
             var emitted = ordered.Take(MaxRows).ToList();

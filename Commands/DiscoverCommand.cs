@@ -2,7 +2,7 @@ using System.CommandLine;
 using System.Text;
 using System.Text.Json;
 using AzureFlowLogParser.Models;
-using AzureFlowLogParser.Services.Common;
+using AzureFlowLogParser.Serialization;
 using AzureFlowLogParser.Services.Discovery;
 
 namespace AzureFlowLogParser.Commands;
@@ -87,7 +87,7 @@ public static class DiscoverCommand
                 .LoadAsync(new InventoryRequest(subscriptions, storageAccounts, staleHours, includeAll), log, cancellationToken);
 
             var text = outputFormat == "json"
-                ? JsonSerializer.Serialize(load.Result, JsonOptions.Indented)
+                ? JsonSerializer.Serialize(load.Result, IndentedJsonContext.Default.InventoryResult)
                 : RenderTable(load.Result);
 
             if (string.IsNullOrWhiteSpace(output))

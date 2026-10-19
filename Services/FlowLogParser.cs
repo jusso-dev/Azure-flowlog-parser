@@ -1,5 +1,6 @@
 using System.Text.Json;
 using AzureFlowLogParser.Models;
+using AzureFlowLogParser.Serialization;
 
 namespace AzureFlowLogParser.Services;
 
@@ -14,12 +15,7 @@ public class FlowLogParser
     /// </summary>
     public static List<DenormalizedFlowRecord> ParseFlowLog(string jsonContent)
     {
-        var options = new JsonSerializerOptions
-        {
-            PropertyNameCaseInsensitive = true
-        };
-
-        var flowLogRoot = JsonSerializer.Deserialize<FlowLogRoot>(jsonContent, options);
+        var flowLogRoot = JsonSerializer.Deserialize(jsonContent, AppJsonContext.Default.FlowLogRoot);
 
         if (flowLogRoot?.Records == null)
         {
@@ -116,12 +112,8 @@ public class FlowLogParser
     /// </summary>
     public static string FormatAsJson(List<DenormalizedFlowRecord> records, bool indented = true)
     {
-        var options = new JsonSerializerOptions
-        {
-            WriteIndented = indented,
-            DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
-        };
-
-        return JsonSerializer.Serialize(records, options);
+        return indented
+            ? JsonSerializer.Serialize(records, IndentedJsonContext.Default.ListDenormalizedFlowRecord)
+            : JsonSerializer.Serialize(records, AppJsonContext.Default.ListDenormalizedFlowRecord);
     }
 }

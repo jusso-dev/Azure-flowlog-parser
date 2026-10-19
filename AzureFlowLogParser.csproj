@@ -8,6 +8,13 @@
     <AssemblyName>azure-flowlog-parser</AssemblyName>
     <!-- Test project lives under tests/ and must not be compiled into the CLI -->
     <DefaultItemExcludes>$(DefaultItemExcludes);tests/**;powershell/**</DefaultItemExcludes>
+    <!-- Native AOT: a self-contained single executable, so no .NET runtime is needed on the target machine -->
+    <PublishAot>true</PublishAot>
+    <IsAotCompatible>true</IsAotCompatible>
+    <StripSymbols>true</StripSymbols>
+    <OptimizationPreference>Size</OptimizationPreference>
+    <!-- Runs without libicu on Linux hosts; report number formatting is fixed to invariant culture -->
+    <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
 
   <ItemGroup>

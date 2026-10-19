@@ -165,7 +165,7 @@ public static class PdfReportWriter
             })
             .ToList();
         layout.Table(["First seen", "Source", "Destination", "Port", "Proto", "Action", "Dir", "Flows", "Bytes", "Rule"],
-            [76, 70, 70, 32, 32, 36, 24, 40, 52, 85], rows, fontSize: 7);
+            [76, 70, 70, 32, 32, 36, 24, 40, 52, 83], rows, fontSize: 7);
     }
 
     private static void WriteNotes(PdfLayout layout, ReportModel model)

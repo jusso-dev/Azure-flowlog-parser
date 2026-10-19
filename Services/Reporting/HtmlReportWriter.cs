@@ -2,7 +2,7 @@ using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using AzureFlowLogParser.Models;
-using AzureFlowLogParser.Services.Common;
+using AzureFlowLogParser.Serialization;
 
 namespace AzureFlowLogParser.Services.Reporting;
 
@@ -17,7 +17,7 @@ public static class HtmlReportWriter
     public static void Write(ReportModel model, string path)
     {
         var template = LoadTemplate();
-        var json = JsonSerializer.Serialize(model, JsonOptions.Compact).Replace("</", "<\\/", StringComparison.Ordinal);
+        var json = JsonSerializer.Serialize(model, AppJsonContext.Default.ReportModel).Replace("</", "<\\/", StringComparison.Ordinal);
         var html = template.Replace(DataPlaceholder, json, StringComparison.Ordinal);
         File.WriteAllText(path, html, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
     }
