@@ -1,0 +1,11 @@
+{
+  "value": [
+    {
+      "name": "NetworkWatcher_australiaeast",
+      "type": "Microsoft.Network/networkWatchers",
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/NetworkWatcherRG/providers/Microsoft.Network/networkWatchers/NetworkWatcher_australiaeast",
+      "location": "australiaeast",
+      "properties": { "provisioningState": "Succeeded" }
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "value": [
+    {
+      "name": "hub-vnet",
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/hub-vnet",
+      "location": "australiaeast",
+      "properties": {
+        "addressSpace": { "addressPrefixes": ["10.10.0.0/16"] },
+        "subnets": [
+          {
+            "name": "app",
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/hub-vnet/subnets/app",
+            "properties": {
+              "addressPrefix": "10.10.1.0/24",
+              "networkSecurityGroup": { "id": "/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/rg-app/providers/Microsoft.Network/networkSecurityGroups/web-nsg" }
+            }
+          },
+          {
+            "name": "dual",
+            "properties": {
+              "addressPrefixes": ["10.10.2.0/24", "10.10.3.0/24"]
+            }
+          },
+          {
+            "name": "empty",
+            "properties": {}
+          }
+        ]
+      }
+    }
+  ]
+}
