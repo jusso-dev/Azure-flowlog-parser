@@ -222,9 +222,9 @@ function New-FlowLogStorageContext {
 
 function Test-FlowLogContainer {
     [CmdletBinding()]
-    param($Context)
+    param($Context, [string]$Container = $script:FlowLogContainerName)
 
-    $result = Invoke-FlowLogAzCli -Arguments @('storage', 'container', 'exists', '--account-name', $Context.Name, '--name', $script:FlowLogContainerName, '--auth-mode', 'login')
+    $result = Invoke-FlowLogAzCli -Arguments @('storage', 'container', 'exists', '--account-name', $Context.Name, '--name', $Container, '--auth-mode', 'login')
     return [bool](Get-FlowLogProperty -Object $result -Name 'exists')
 }
 
@@ -232,13 +232,13 @@ function Get-FlowLogBlobList {
     # --num-results=* returns every blob, as the Az listing did. A positive MaxCount caps the listing. The '=' form
     # keeps PowerShell from expanding a bare * against the current directory.
     [CmdletBinding()]
-    param($Context, [string]$Prefix, [int]$MaxCount = 0)
+    param($Context, [string]$Prefix, [int]$MaxCount = 0, [string]$Container = $script:FlowLogContainerName)
 
     $numResults = if ($MaxCount -gt 0) { [string]$MaxCount } else { '*' }
-    $blobs = @(Invoke-FlowLogAzCli -Arguments @(
-        'storage', 'blob', 'list', '--account-name', $Context.Name, '--container-name', $script:FlowLogContainerName,
-        "--prefix=$Prefix", "--num-results=$numResults", '--auth-mode', 'login'
-    ))
+    $arguments = @('storage', 'blob', 'list', '--account-name', $Context.Name, '--container-name', $Container)
+    if ($Prefix) { $arguments += "--prefix=$Prefix" }
+    $arguments += @("--num-results=$numResults", '--auth-mode', 'login')
+    $blobs = @(Invoke-FlowLogAzCli -Arguments $arguments)
     foreach ($blob in $blobs) {
         $properties = Get-FlowLogProperty -Object $blob -Name 'properties'
         [pscustomobject]@{
@@ -251,12 +251,12 @@ function Get-FlowLogBlobList {
 
 function Read-FlowLogBlobText {
     [CmdletBinding()]
-    param($Context, [Parameter(Mandatory)][string]$Name)
+    param($Context, [Parameter(Mandatory)][string]$Name, [string]$Container = $script:FlowLogContainerName)
 
     $destination = Join-Path ([System.IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString('N') + '.json')
     try {
         Invoke-FlowLogAzCli -Arguments @(
-            'storage', 'blob', 'download', '--account-name', $Context.Name, '--container-name', $script:FlowLogContainerName,
+            'storage', 'blob', 'download', '--account-name', $Context.Name, '--container-name', $Container,
             "--name=$Name", '--file', $destination, '--auth-mode', 'login', '--no-progress'
         ) | Out-Null
         return [System.IO.File]::ReadAllText($destination)
@@ -264,4 +264,27 @@ function Read-FlowLogBlobText {
     finally {
         Remove-Item -LiteralPath $destination -ErrorAction SilentlyContinue
     }
+}
+
+function Get-FlowLogBlobMetadata {
+    # User metadata of one blob as an object of name/value pairs (empty when the blob has none).
+    [CmdletBinding()]
+    param($Context, [Parameter(Mandatory)][string]$Name, [string]$Container = $script:FlowLogContainerName)
+
+    Invoke-FlowLogAzCli -Arguments @(
+        'storage', 'blob', 'metadata', 'show', '--account-name', $Context.Name, '--container-name', $Container,
+        "--name=$Name", '--auth-mode', 'login'
+    )
+}
+
+function Set-FlowLogBlobMetadata {
+    # Replaces all user metadata on one blob. The pairs are written in the order given.
+    [CmdletBinding()]
+    param($Context, [Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][System.Collections.IDictionary]$Metadata, [string]$Container = $script:FlowLogContainerName)
+
+    $pairs = @($Metadata.Keys | ForEach-Object { "$_=$($Metadata[$_])" })
+    Invoke-FlowLogAzCli -Arguments (@(
+        'storage', 'blob', 'metadata', 'update', '--account-name', $Context.Name, '--container-name', $Container,
+        "--name=$Name", '--auth-mode', 'login', '--metadata'
+    ) + $pairs) | Out-Null
 }

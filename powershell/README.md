@@ -94,6 +94,24 @@ Export-FlowLogReport -Model $model -Format Html -Path ./flowlog-7d.html
 
 `Export-FlowLogReport` returns a `FileInfo`. HTML embeds the model as JSON in the template from `shared/report-template.html`; the module copy in `AzureFlowLogReport/Templates/` must stay byte-identical to it (the test suite checks this). PDF is a hand-written PDF 1.4 writer with Helvetica and no third-party dependencies.
 
+### Records and blob state (`Get-FlowLogRecord`)
+
+`Get-FlowLogRecord` is the counterpart of the .NET `parse` command's storage reads. It writes one denormalized object per flow tuple, with the .NET field names (`time`, `nsgRuleName`, `startTime`, `sourceAddress`, ... and `flowState`, `packetsStoD`, `bytesStoD`, `packetsDtoS`, `bytesDtoS` for version 2 blobs).
+
+```powershell
+Get-FlowLogRecord -StorageAccountName stflowlogs01 -Limit 5 -OutputPath ./records.json
+Get-FlowLogRecord -StorageAccountName stflowlogs01, stflowlogs02 -Format Jsonl -OutputPath ./records.jsonl
+Get-FlowLogRecord -StorageAccountName stflowlogs01 -ListOnly
+```
+
+State tracking is on by default. For each blob the function reads its metadata and processes the blob unless the metadata holds `lastProcessed` and `processedBlobLastModified`, the timestamp parses, and the blob's LastModified is not newer than it. Missing or unreadable metadata means process. After a successful parse the blob's metadata is replaced with four pairs: `lastProcessed` (UTC now, `o` format), `processedBlobLastModified` (the blob's LastModified), `recordCount` and `processedBy=AzureFlowLogParser`. `-Limit` applies after that filter. `-ForceReprocess` skips the metadata reads (and still writes the metadata). A failed download, parse or metadata write warns and moves on to the next blob.
+
+- `-ListOnly` lists the blob names without the state filter, as the .NET `parse` command does. It downloads and writes nothing.
+- With `-OutputPath`, every account's records go to one file. The .NET command writes one file per account.
+- Empty results still write the file (`[]` or an empty file). The .NET command writes nothing in that case.
+- Blob metadata is written with `az storage blob metadata update`, so the signed-in identity needs write access to the blobs (for example Storage Blob Data Contributor).
+- HTTP posting (`parse --http-endpoint`) is not ported.
+
 ## Parity with the .NET CLI
 
 | .NET (`azure-flowlog-parser`) | PowerShell |
@@ -111,6 +129,8 @@ Export-FlowLogReport -Model $model -Format Html -Path ./flowlog-7d.html
 | `report --topology <file>` | `-TopologyPath <file>` (with `-InputPath` only) |
 | `report --report html\|pdf` | `Export-FlowLogReport -Format Html\|Pdf` |
 | `-o <file>` | `-Path <file>` (required; no default file name) |
+| `parse --enable-state-tracking` (on by default here) | `Get-FlowLogRecord` (state tracking is on; `-DisableStateTracking` turns it off) |
+| `parse --http-endpoint` and the HTTP posting options | Not ported. `Get-FlowLogRecord` writes records to the pipeline or a file only |
 
 Timestamps in the model are ISO-8601 strings. PowerShell 7.6's `ConvertFrom-Json` converts them to `DateTime` by default, so read saved reports back with `ConvertFrom-Json -DateKind String` if you need the original strings.
 
