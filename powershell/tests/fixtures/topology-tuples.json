@@ -1,0 +1,6 @@
+{"records":[{"time":"2024-01-15T11:30:00.0000000Z","properties":{"Version":2},"flowRecords":{"flows":[
+  {"rule":"DefaultRule_AllowVnetInBound","flowGroups":[{"flowTuples":["1705318200,10.10.1.1,10.10.5.9,50000,443,T,I,A,B,1,100,1,200"]}]},
+  {"rule":"DefaultRule_AllowVnetOutBound","flowGroups":[{"flowTuples":["1705318205,10.10.5.9,13.107.42.14,50001,443,T,O,A,B,1,100,1,200"]}]},
+  {"rule":"DefaultRule_AllowInternetOutBound","flowGroups":[{"flowTuples":["1705318210,10.10.1.1,13.107.42.14,50002,443,T,O,A,B,1,100,1,200"]}]},
+  {"rule":"UserRule_DenySSH","flowGroups":[{"flowTuples":["1705318215,10.20.0.1,10.10.5.9,1,22,T,I,D,B,0,0,0,0"]}]}
+]}}]}

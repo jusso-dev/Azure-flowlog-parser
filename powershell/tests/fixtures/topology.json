@@ -1,0 +1,6 @@
+{
+  "networks": [
+    { "name": "stflowlogs01", "kind": "storage", "prefixes": ["10.10.0.0/16", "2001:db8::/32"] },
+    { "name": "vnet-spoke", "kind": "vnet", "prefixes": [" 10.10.5.0/24 "] }
+  ]
+}
