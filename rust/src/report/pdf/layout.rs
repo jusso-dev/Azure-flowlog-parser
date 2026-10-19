@@ -137,15 +137,20 @@ impl PdfLayout {
         self.document.build()
     }
 
+    /// Draws the header row. Header text wraps onto extra lines when a narrow column cannot hold it.
     fn draw_header(&mut self, headers: &[&str], widths: &[f64], font_size: f64) {
-        self.document.page_mut(self.page).fill_rect(MARGIN, self.top, CONTENT_WIDTH, HEADER_HEIGHT, HEADER_FILL);
+        let (lines, height) = header_lines(headers, widths, font_size);
+        self.document.page_mut(self.page).fill_rect(MARGIN, self.top, CONTENT_WIDTH, height, HEADER_FILL);
+        let line_height = font_size + 2.0;
         let mut x = MARGIN;
-        for (header, width) in headers.iter().zip(widths) {
-            let label = text::fit(header, *width - 8.0, font_size, true);
-            self.document.page_mut(self.page).text(&label, x + 4.0, self.top + 4.0, font_size, PdfColor::WHITE, true);
+        for (column, width) in lines.iter().zip(widths) {
+            for (index, line) in column.iter().enumerate() {
+                let y = self.top + 4.0 + index as f64 * line_height;
+                self.document.page_mut(self.page).text(line, x + 4.0, y, font_size, PdfColor::WHITE, true);
+            }
             x += *width;
         }
-        self.top += HEADER_HEIGHT;
+        self.top += height;
     }
 
     fn draw_cell_text(&mut self, value: &str, x: f64, width: f64, font_size: f64) {
@@ -165,10 +170,49 @@ impl PdfLayout {
     }
 }
 
+/// Header text per column, wrapped to its column, and the header row height. One line keeps the 16pt row; each
+/// extra line adds the line height (font size + 2) and a 6pt margin. Port of DrawHeader in PdfLayout.cs.
+fn header_lines(headers: &[&str], widths: &[f64], font_size: f64) -> (Vec<Vec<String>>, f64) {
+    let lines: Vec<Vec<String>> =
+        headers.iter().zip(widths).map(|(header, width)| text::wrap(header, width - 8.0, font_size, true)).collect();
+    let most_lines = lines.iter().map(Vec::len).max().unwrap_or(0);
+    let height = HEADER_HEIGHT.max(most_lines as f64 * (font_size + 2.0) + 6.0);
+    (lines, height)
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::document::test_support::{assert_qpdf_clean, assert_well_formed};
     use super::*;
+
+    #[test]
+    fn narrow_header_wraps_onto_lines_and_grows_the_row() {
+        // 0.6 * 8 = 4.8pt per bold character: "Unmanaged source" (77pt) does not fit 52pt, so it breaks at the space.
+        let (lines, height) = header_lines(&["Unmanaged source", "Status"], &[60.0, 60.0], 8.0);
+
+        assert_eq!(lines[0], ["Unmanaged", "source"]);
+        assert_eq!(lines[1], ["Status"]);
+        assert_eq!(height, 2.0 * 10.0 + 6.0);
+    }
+
+    #[test]
+    fn single_line_headers_keep_the_sixteen_point_row() {
+        let (_, height) = header_lines(&["Status", "Age"], &[60.0, 35.0], 8.0);
+
+        assert_eq!(height, 16.0);
+    }
+
+    #[test]
+    fn narrow_header_is_drawn_on_wrapped_lines_not_truncated() {
+        let mut layout = PdfLayout::new();
+
+        layout.table(&["Unmanaged source"], &[60.0], &[], 8.0);
+
+        let content = &layout.document.pages[0].content;
+        assert!(content.contains("(Unmanaged) Tj"), "first header line missing");
+        assert!(content.contains("(source) Tj"), "second header line missing");
+        assert!(!content.contains(".."), "header must not be truncated");
+    }
 
     #[test]
     fn long_table_paginates_and_repeats_its_header() {

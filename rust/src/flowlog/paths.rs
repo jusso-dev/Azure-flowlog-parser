@@ -33,6 +33,31 @@ pub fn target_from_blob_name(blob_name: &str) -> Option<String> {
     BLOB_TARGET.captures(blob_name).map(|captures| captures["target"].to_string())
 }
 
+/// Name of a flow log target: the last segment of its ARM id (the NSG or VNet name).
+pub fn target_name(target_resource_id: &str) -> String {
+    last_segment(target_resource_id)
+}
+
+/// Resource group of a flow log target, or empty when the id has no resourceGroups segment.
+pub fn target_resource_group(target_resource_id: &str) -> String {
+    resource_group_of(target_resource_id)
+}
+
+/// Resource group from an ARM id: the segment after "resourceGroups" (case-insensitive). Empty when absent.
+pub fn resource_group_of(id: &str) -> String {
+    let parts: Vec<&str> = id.split('/').filter(|part| !part.is_empty()).collect();
+    parts
+        .windows(2)
+        .find(|pair| pair[0].eq_ignore_ascii_case("resourceGroups"))
+        .map(|pair| pair[1].to_string())
+        .unwrap_or_default()
+}
+
+/// Last segment of an ARM id, or the input when it has no segments.
+pub fn last_segment(id: &str) -> String {
+    id.rsplit('/').find(|part| !part.is_empty()).unwrap_or(id).to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use chrono::NaiveDate;
@@ -72,5 +97,30 @@ mod tests {
             Some("/SUBSCRIPTIONS/0000/RESOURCEGROUPS/RG-NET/PROVIDERS/MICROSOFT.NETWORK/NETWORKSECURITYGROUPS/NSG-APP")
         );
         assert_eq!(target_from_blob_name("resourceId=/other/y=2026/PT1H.json"), None);
+    }
+
+    #[test]
+    fn target_name_and_resource_group_read_nsg_and_vnet_ids() {
+        let vnet = "/subscriptions/0000/resourceGroups/RG-Net/providers/Microsoft.Network/virtualNetworks/hub-vnet";
+        assert_eq!(target_name(NSG), "nsg-app");
+        assert_eq!(target_resource_group(NSG), "rg-net");
+        assert_eq!(target_name(vnet), "hub-vnet");
+        assert_eq!(target_resource_group(vnet), "RG-Net");
+    }
+
+    #[test]
+    fn target_without_resource_group_segment_has_empty_group() {
+        let id = "/subscriptions/0000/providers/Microsoft.Network/virtualNetworks/hub/";
+        assert_eq!(target_name(id), "hub");
+        assert_eq!(target_resource_group(id), "");
+        assert_eq!(target_name(""), "");
+    }
+
+    #[test]
+    fn arm_id_helpers_ignore_case_and_trailing_slashes() {
+        let id = "/subscriptions/s/RESOURCEGROUPS/My-RG/providers/Microsoft.Storage/storageAccounts/acct/";
+        assert_eq!(resource_group_of(id), "My-RG");
+        assert_eq!(last_segment(id), "acct");
+        assert_eq!(resource_group_of("/subscriptions/s"), "");
     }
 }

@@ -4,9 +4,9 @@
 use anyhow::Result;
 
 use crate::azure::AzureClient;
-use crate::azure::arm::last_segment;
 use crate::cli::DiscoverArgs;
 use crate::discovery::{InventoryRequest, load_inventory, progress_logger};
+use crate::flowlog::paths::last_segment;
 use crate::model::{InventoryResult, flow_status};
 
 pub async fn run(args: &DiscoverArgs) -> Result<u8> {
@@ -86,7 +86,7 @@ fn render_table(result: &InventoryResult) -> String {
                     yes_no(config.enabled).to_string(),
                     config.status.clone(),
                     config.latest_blob_utc.clone().unwrap_or_else(|| "-".to_string()),
-                    config.age_hours.map_or_else(|| "-".to_string(), |hours| format!("{hours:.1}")),
+                    config.age_hours.map_or_else(|| "-".to_string(), crate::util::one_decimal),
                 ]
             })
             .collect();

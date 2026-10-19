@@ -1,12 +1,14 @@
 use std::path::Path;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
 use super::ipv4::Ipv4Lookup;
-use crate::model::{ReportScope, scope_kind};
+use crate::model::{ReportScope, ReportSubscription, scope_kind};
+use crate::util::file_name;
 
-/// Offline topology: { "networks": [ { "name", "kind": "storage"|"vnet", "prefixes": [...] } ] }.
+/// Offline topology: { "networks": [ { "name", "kind": "storage"|"vnet", "prefixes": [...] } ],
+/// "subscriptions": [ { "subscriptionId", "displayName", "tenantId" } ] }. The subscriptions key is optional.
 #[derive(Debug)]
 pub struct TopologyFileResult {
     pub lookup: Ipv4Lookup,
@@ -15,12 +17,18 @@ pub struct TopologyFileResult {
     pub skipped_prefixes: usize,
     /// Names of "storage" networks: the dedupe read set in offline mode.
     pub storage_accounts: Vec<String>,
+    /// Subscriptions in file order. Entries that cannot be used are left out and named in `notes`.
+    pub subscriptions: Vec<ReportSubscription>,
+    pub notes: Vec<String>,
 }
 
 #[derive(Deserialize)]
 struct Document {
     #[serde(default)]
     networks: Vec<Network>,
+    /// Read entry by entry (see `read_subscriptions`), so one bad entry is noted instead of failing the file.
+    #[serde(default)]
+    subscriptions: Option<Vec<serde_json::Value>>,
 }
 
 #[derive(Deserialize)]
@@ -37,11 +45,12 @@ pub fn load(path: &Path) -> Result<TopologyFileResult> {
     if !path.is_file() {
         bail!("Topology file not found: {}", path.display());
     }
-    parse(&std::fs::read_to_string(path)?)
+    parse(&std::fs::read_to_string(path)?, &file_name(path))
 }
 
-fn parse(json: &str) -> Result<TopologyFileResult> {
-    let document: Document = serde_json::from_str(json)?;
+/// `file` names the topology file in a JSON error ("topology file <name>: <message>"), as the .NET tool does.
+fn parse(json: &str, file: &str) -> Result<TopologyFileResult> {
+    let document: Document = serde_json::from_str(json).with_context(|| format!("topology file {file}"))?;
 
     let mut lookup = Ipv4Lookup::new();
     let mut prefixes = 0;
@@ -83,7 +92,41 @@ fn parse(json: &str) -> Result<TopologyFileResult> {
         }
     }
 
-    Ok(TopologyFileResult { lookup, networks: document.networks.len(), prefixes, skipped_prefixes, storage_accounts })
+    let (subscriptions, notes) = read_subscriptions(&document.subscriptions.unwrap_or_default());
+
+    Ok(TopologyFileResult {
+        lookup,
+        networks: document.networks.len(),
+        prefixes,
+        skipped_prefixes,
+        storage_accounts,
+        subscriptions,
+        notes,
+    })
+}
+
+/// Same rules as TopologyFile.cs: an entry that is not an object, or has no subscriptionId string, is left out with
+/// a note. Other fields that are not strings count as missing.
+fn read_subscriptions(entries: &[serde_json::Value]) -> (Vec<ReportSubscription>, Vec<String>) {
+    let mut subscriptions = Vec::new();
+    let mut notes = Vec::new();
+    for (index, entry) in entries.iter().enumerate() {
+        let position = index + 1;
+        let Some(object) = entry.as_object() else {
+            notes.push(format!("Topology subscription entry ignored: entry {position} is not an object."));
+            continue;
+        };
+        let text = |name: &str| object.get(name).and_then(serde_json::Value::as_str).map(str::to_string);
+        match text("subscriptionId") {
+            Some(subscription_id) if !subscription_id.trim().is_empty() => subscriptions.push(ReportSubscription {
+                subscription_id,
+                display_name: text("displayName").unwrap_or_default(),
+                tenant_id: text("tenantId").unwrap_or_default(),
+            }),
+            _ => notes.push(format!("Topology subscription entry ignored: entry {position} has no subscriptionId.")),
+        }
+    }
+    (subscriptions, notes)
 }
 
 #[cfg(test)]
@@ -98,6 +141,7 @@ mod tests {
                 { "name": "stflowlogs01", "kind": "Storage", "prefixes": ["10.10.0.0/16", " 10.20.1.0/24 ", "2001:db8::/32"] },
                 { "name": "vnet-hub", "kind": "vnet", "prefixes": ["10.99.0.0/16"] }
             ] }"#,
+            "topology.json",
         )
         .unwrap();
 
@@ -117,10 +161,11 @@ mod tests {
 
     #[test]
     fn unknown_kind_and_blank_name_are_errors() {
-        let error = parse(r#"{ "networks": [{ "name": "x", "kind": "subnet", "prefixes": [] }] }"#).unwrap_err();
+        let error =
+            parse(r#"{ "networks": [{ "name": "x", "kind": "subnet", "prefixes": [] }] }"#, "t.json").unwrap_err();
         assert_eq!(error.to_string(), "Topology network 'x' has kind 'subnet'. Use storage or vnet.");
 
-        let error = parse(r#"{ "networks": [{ "name": "  ", "kind": "storage" }] }"#).unwrap_err();
+        let error = parse(r#"{ "networks": [{ "name": "  ", "kind": "storage" }] }"#, "t.json").unwrap_err();
         assert_eq!(error.to_string(), "Every topology network needs a name.");
     }
 
@@ -129,5 +174,96 @@ mod tests {
         let missing = std::env::temp_dir().join("flowlog-topology-does-not-exist.json");
         let error = load(&missing).unwrap_err().to_string();
         assert_eq!(error, format!("Topology file not found: {}", missing.display()));
+    }
+
+    #[test]
+    fn json_error_names_the_file() {
+        let path = std::env::temp_dir().join("flowlog-topology-bad-subscriptions.json");
+        std::fs::write(&path, r#"{ "networks": [], "subscriptions": "sub-1" }"#).unwrap();
+
+        let error = format!("{:#}", load(&path).unwrap_err());
+
+        assert!(
+            error.starts_with("topology file flowlog-topology-bad-subscriptions.json: invalid type: string \"sub-1\""),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn subscriptions_load_in_file_order_and_unknown_keys_are_ignored() {
+        let loaded = parse(
+            r#"{
+                "owner": { "team": "net" },
+                "networks": [{ "name": "stflowlogs01", "kind": "storage", "prefixes": ["10.10.0.0/16"], "region": "au" }],
+                "subscriptions": [
+                    { "subscriptionId": "sub-b", "displayName": "Second", "tenantId": "t-1", "state": "Enabled" },
+                    { "subscriptionId": "sub-a", "displayName": "First" }
+                ]
+            }"#,
+            "topology.json",
+        )
+        .unwrap();
+
+        assert_eq!(loaded.networks, 1);
+        assert_eq!(
+            loaded.subscriptions,
+            vec![
+                ReportSubscription {
+                    subscription_id: "sub-b".into(),
+                    display_name: "Second".into(),
+                    tenant_id: "t-1".into()
+                },
+                ReportSubscription {
+                    subscription_id: "sub-a".into(),
+                    display_name: "First".into(),
+                    tenant_id: String::new()
+                },
+            ]
+        );
+        assert!(loaded.notes.is_empty());
+    }
+
+    #[test]
+    fn subscriptions_key_is_optional_and_null_means_none() {
+        let loaded = parse(r#"{ "networks": [] }"#, "topology.json").unwrap();
+        assert!(loaded.subscriptions.is_empty());
+        assert!(loaded.notes.is_empty());
+
+        let loaded = parse(r#"{ "networks": [], "subscriptions": null }"#, "topology.json").unwrap();
+        assert!(loaded.subscriptions.is_empty());
+        assert!(loaded.notes.is_empty());
+    }
+
+    #[test]
+    fn malformed_subscription_entries_are_ignored_with_a_note() {
+        let loaded = parse(
+            r#"{ "networks": [], "subscriptions": [
+                { "displayName": "No id" },
+                { "subscriptionId": "  ", "displayName": "Blank id" },
+                { "subscriptionId": 42 },
+                "sub-as-string",
+                { "subscriptionId": "sub-ok", "displayName": "Kept", "tenantId": 7 }
+            ] }"#,
+            "topology.json",
+        )
+        .unwrap();
+
+        assert_eq!(
+            loaded.subscriptions,
+            vec![ReportSubscription {
+                subscription_id: "sub-ok".into(),
+                display_name: "Kept".into(),
+                tenant_id: String::new()
+            }]
+        );
+        assert_eq!(
+            loaded.notes,
+            vec![
+                "Topology subscription entry ignored: entry 1 has no subscriptionId.",
+                "Topology subscription entry ignored: entry 2 has no subscriptionId.",
+                "Topology subscription entry ignored: entry 3 has no subscriptionId.",
+                "Topology subscription entry ignored: entry 4 is not an object.",
+            ]
+        );
     }
 }

@@ -12,7 +12,7 @@ use crate::azure::blob;
 use crate::azure::http::AzureHttpError;
 use crate::flowlog::paths::{ALL_RESOURCES_PREFIX, CONTAINER_NAME, day_prefix, target_from_blob_name};
 use crate::model::{AzureTopology, FlowLogConfigInfo, InventoryResult, StorageAccountInfo, flow_status};
-use crate::util::{iso, iso_opt};
+use crate::util::{iso, iso_opt, one_decimal};
 
 /// Parallel health checks, as InventoryService.cs (MaxDegreeOfParallelism = 8).
 const HEALTH_CONCURRENCY: usize = 8;
@@ -288,7 +288,8 @@ pub fn apply_latest(
             config.age_hours = Some(age_hours);
             let stale = age > stale_after;
             config.status = if stale { flow_status::STALE } else { flow_status::HEALTHY }.to_string();
-            config.message = if stale { format!("Newest blob is {age_hours:.1} hours old.") } else { String::new() };
+            config.message =
+                if stale { format!("Newest blob is {} hours old.", one_decimal(age_hours)) } else { String::new() };
         }
     }
 }

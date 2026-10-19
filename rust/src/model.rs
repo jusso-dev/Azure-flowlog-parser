@@ -67,6 +67,12 @@ pub struct FlowLogConfigInfo {
     pub location: String,
     pub target: String,
     pub target_kind: String,
+    /// NSG or VNet name (last segment of target). Defaulted so JSON written before this field still loads.
+    #[serde(default)]
+    pub target_name: String,
+    /// Resource group of the target. Defaulted so JSON written before this field still loads.
+    #[serde(default)]
+    pub target_resource_group: String,
     pub enabled: bool,
     pub retention_days: u32,
     pub traffic_analytics: bool,
@@ -87,10 +93,31 @@ pub struct InventoryResult {
 
 // ---------- Azure topology (raw ARM data, no health) ----------
 
+/// A subscription as ARM reports it. The display name and tenant are empty when ARM does not return them.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SubscriptionRef {
     pub id: String,
     pub display_name: String,
+    pub tenant_id: String,
+}
+
+/// Subscription entry in the report JSON (ReportModel.subscriptions). Also the shape of the topology file entries.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReportSubscription {
+    pub subscription_id: String,
+    pub display_name: String,
+    pub tenant_id: String,
+}
+
+impl From<&SubscriptionRef> for ReportSubscription {
+    fn from(subscription: &SubscriptionRef) -> Self {
+        Self {
+            subscription_id: subscription.id.clone(),
+            display_name: subscription.display_name.clone(),
+            tenant_id: subscription.tenant_id.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -165,6 +192,7 @@ pub struct ReportModel {
     pub schema: u32,
     pub generated_utc: String,
     pub source: String,
+    pub subscriptions: Vec<ReportSubscription>,
     pub window: ReportWindow,
     pub filters: ReportFilters,
     pub summary: ReportSummary,
@@ -239,4 +267,48 @@ pub struct ReportFlow {
     pub flows: i64,
     pub packets: i64,
     pub bytes: i64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn report_json_places_subscriptions_after_source_and_carries_target_fields() {
+        let model = ReportModel {
+            source: "azure".into(),
+            subscriptions: vec![ReportSubscription {
+                subscription_id: "sub-1".into(),
+                display_name: "Prod".into(),
+                tenant_id: "tenant-1".into(),
+            }],
+            flow_logs: vec![FlowLogConfigInfo {
+                target_name: "web-nsg".into(),
+                target_resource_group: "rg-app".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let text = serde_json::to_string(&model).unwrap();
+        assert!(text.find("\"source\"") < text.find("\"subscriptions\""));
+        let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            json["subscriptions"],
+            serde_json::json!([{ "subscriptionId": "sub-1", "displayName": "Prod", "tenantId": "tenant-1" }])
+        );
+        assert_eq!(json["flowLogs"][0]["targetName"], "web-nsg");
+        assert_eq!(json["flowLogs"][0]["targetResourceGroup"], "rg-app");
+    }
+
+    #[test]
+    fn flow_log_json_written_before_target_fields_still_loads() {
+        let json = r#"{ "subscriptionId": "sub-1", "name": "fl", "storageAccount": "st", "networkWatcher": "nw",
+            "location": "australiaeast", "target": "/x", "targetKind": "NSG", "enabled": true, "retentionDays": 0,
+            "trafficAnalytics": false, "status": "Healthy", "message": "" }"#;
+
+        let config: FlowLogConfigInfo = serde_json::from_str(json).unwrap();
+
+        assert_eq!((config.target_name.as_str(), config.target_resource_group.as_str()), ("", ""));
+    }
 }

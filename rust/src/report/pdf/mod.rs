@@ -11,13 +11,22 @@ use std::path::Path;
 use anyhow::Context;
 
 use crate::model::{ReportFlow, ReportModel, ReportScope, scope_kind};
-use crate::util::{format_bytes, thousands};
+use crate::util::{format_bytes, one_decimal, thousands};
 use layout::{Cell, PdfLayout};
 
 const TOP_EDGES: usize = 50;
 const TOP_FLOWS: usize = 150;
 /// Body text size: the default of the .NET Paragraph call.
 const BODY: f64 = 9.0;
+/// Tenant and Subscriptions rows when the run has no subscription data (offline input without a topology).
+const NOT_AVAILABLE: &str = "not available (offline input)";
+/// Monitoring table columns. Each width list adds up to 515 points, the text width of the page.
+const ACCOUNT_HEADERS: [&str; 7] =
+    ["Storage account", "Resource group", "Subscription", "Status", "Configs", "Latest blob", "Unmanaged source"];
+const ACCOUNT_WIDTHS: [f64; 7] = [88.0, 84.0, 110.0, 60.0, 38.0, 75.0, 60.0];
+const FLOW_LOG_HEADERS: [&str; 8] =
+    ["Storage account", "Flow log", "Target", "Target RG", "Kind", "Enabled", "Status", "Age"];
+const FLOW_LOG_WIDTHS: [f64; 8] = [78.0, 92.0, 88.0, 92.0, 34.0, 38.0, 58.0, 35.0];
 
 pub fn write(model: &ReportModel, path: &Path) -> anyhow::Result<()> {
     let mut layout = PdfLayout::new();
@@ -60,22 +69,65 @@ pub fn write(model: &ReportModel, path: &Path) -> anyhow::Result<()> {
 }
 
 fn write_summary(layout: &mut PdfLayout, model: &ReportModel) {
-    let s = &model.summary;
     layout.heading("Summary");
-    let rows = vec![
+    layout.table(&["Measure", "Value"], &[170.0, 345.0], &summary_rows(model), 8.5);
+}
+
+fn summary_rows(model: &ReportModel) -> Vec<Vec<Cell>> {
+    let s = &model.summary;
+    vec![
+        pair("Tenant", tenant_summary(model)),
+        pair("Subscriptions", subscription_summary(model)),
         pair("Flow observations", thousands(s.flows)),
         pair("Allowed / denied", format!("{} / {}", thousands(s.allowed), thousands(s.denied))),
         pair("Bytes / packets", format!("{} / {}", format_bytes(s.bytes), thousands(s.packets))),
         pair("Storage accounts read", thousands(s.storage_accounts as i64)),
         pair("Scopes in report", thousands(s.scopes as i64)),
-        pair("Subscriptions", thousands(s.subscriptions as i64)),
         pair(
             "Unique source / destination IPs",
             format!("{} / {}", thousands(s.unique_source_ips as i64), thousands(s.unique_destination_ips as i64)),
         ),
         pair("Allowed inbound duplicates skipped", thousands(s.observations_skipped)),
-    ];
-    layout.table(&["Measure", "Value"], &[220.0, 295.0], &rows, 8.5);
+    ]
+}
+
+/// Distinct tenant ids in first-seen order, joined with ", ".
+fn tenant_summary(model: &ReportModel) -> String {
+    let mut tenants: Vec<&str> = Vec::new();
+    for tenant in model.subscriptions.iter().map(|s| s.tenant_id.as_str()) {
+        if !tenant.is_empty() && !tenants.contains(&tenant) {
+            tenants.push(tenant);
+        }
+    }
+    if tenants.is_empty() { NOT_AVAILABLE.to_string() } else { tenants.join(", ") }
+}
+
+/// "displayName (subscriptionId)" per subscription, joined with "; ". The id alone when there is no display name.
+fn subscription_summary(model: &ReportModel) -> String {
+    if model.subscriptions.is_empty() {
+        return NOT_AVAILABLE.to_string();
+    }
+    let labels: Vec<String> = model
+        .subscriptions
+        .iter()
+        .map(|s| {
+            if s.display_name.is_empty() {
+                s.subscription_id.clone()
+            } else {
+                format!("{} ({})", s.display_name, s.subscription_id)
+            }
+        })
+        .collect();
+    labels.join("; ")
+}
+
+/// Display name of a subscription in the model, or its id when no name is known.
+fn subscription_name<'a>(model: &'a ReportModel, subscription_id: &'a str) -> &'a str {
+    model
+        .subscriptions
+        .iter()
+        .find(|s| s.subscription_id.eq_ignore_ascii_case(subscription_id) && !s.display_name.is_empty())
+        .map_or(subscription_id, |s| s.display_name.as_str())
 }
 
 fn write_monitoring(layout: &mut PdfLayout, model: &ReportModel) {
@@ -90,50 +142,52 @@ fn write_monitoring(layout: &mut PdfLayout, model: &ReportModel) {
         return;
     }
 
-    let account_rows: Vec<Vec<Cell>> = model
+    layout.table(&ACCOUNT_HEADERS, &ACCOUNT_WIDTHS, &account_rows(model), 8.0);
+
+    let log_rows = flow_log_rows(model);
+    if !log_rows.is_empty() {
+        layout.space(4.0);
+        layout.table(&FLOW_LOG_HEADERS, &FLOW_LOG_WIDTHS, &log_rows, 8.0);
+    }
+}
+
+fn account_rows(model: &ReportModel) -> Vec<Vec<Cell>> {
+    model
         .accounts
         .iter()
         .map(|a| {
             vec![
                 cell(&a.name),
-                cell(&a.subscription_id),
+                cell(or_dash(&a.resource_group)),
+                cell(subscription_name(model, &a.subscription_id)),
                 cell(&a.status),
                 cell(a.flow_log_configs.to_string()),
-                cell(a.latest_blob_utc.as_deref().unwrap_or("-")),
+                cell(a.latest_blob_utc.as_deref().map_or_else(|| "-".to_string(), short_time)),
                 cell(a.observed_target.as_deref().map_or("-", last_segment)),
             ]
         })
-        .collect();
-    layout.table(
-        &["Storage account", "Subscription", "Status", "Configs", "Latest blob (UTC)", "Unmanaged source"],
-        &[92.0, 125.0, 70.0, 48.0, 105.0, 75.0],
-        &account_rows,
-        8.0,
-    );
+        .collect()
+}
 
-    let log_rows: Vec<Vec<Cell>> = model
+fn flow_log_rows(model: &ReportModel) -> Vec<Vec<Cell>> {
+    model
         .flow_logs
         .iter()
         .map(|f| {
+            // Without a target name, show the last segment of the target id.
+            let target = if f.target_name.is_empty() { last_segment(&f.target) } else { f.target_name.as_str() };
             vec![
                 cell(&f.storage_account),
-                cell(last_segment(&f.target)),
+                cell(or_dash(&f.name)),
+                cell(target),
+                cell(or_dash(&f.target_resource_group)),
                 cell(&f.target_kind),
                 cell(if f.enabled { "yes" } else { "no" }),
                 cell(&f.status),
-                cell(f.age_hours.map_or("-".to_string(), |hours| format!("{hours:.1} h"))),
+                cell(f.age_hours.map_or("-".to_string(), |hours| format!("{} h", one_decimal(hours)))),
             ]
         })
-        .collect();
-    if !log_rows.is_empty() {
-        layout.space(4.0);
-        layout.table(
-            &["Storage account", "Target", "Kind", "Enabled", "Status", "Age"],
-            &[110.0, 165.0, 60.0, 60.0, 80.0, 40.0],
-            &log_rows,
-            8.0,
-        );
-    }
+        .collect()
 }
 
 fn write_edges(layout: &mut PdfLayout, model: &ReportModel) {
@@ -348,6 +402,11 @@ fn or_any(value: &str) -> &str {
     if value.is_empty() { "any" } else { value }
 }
 
+/// "-" for an empty table cell, as PdfReportWriter.cs shows missing values.
+fn or_dash(value: &str) -> &str {
+    if value.is_empty() { "-" } else { value }
+}
+
 fn join_or_none(parts: &[String]) -> String {
     if parts.is_empty() { "none".to_string() } else { parts.join(", ") }
 }
@@ -364,7 +423,7 @@ fn pair(label: &str, value: String) -> Vec<Cell> {
 mod tests {
     use super::document::test_support::{assert_qpdf_clean, assert_well_formed};
     use super::*;
-    use crate::model::{FlowLogConfigInfo, ReportSummary, ReportWindow, StorageAccountInfo};
+    use crate::model::{FlowLogConfigInfo, ReportSubscription, ReportSummary, ReportWindow, StorageAccountInfo};
 
     /// The content-stream form of a line drawn on the page, parentheses escaped.
     fn drawn(line: &str) -> String {
@@ -525,5 +584,118 @@ mod tests {
         assert_eq!(last_segment("/subscriptions/s/flowLogs/fl1"), "fl1");
         assert_eq!(last_segment("/subscriptions/s/flowLogs/fl1/"), "fl1");
         assert_eq!(or_any(""), "any");
+    }
+
+    fn subscription(id: &str, name: &str, tenant: &str) -> ReportSubscription {
+        ReportSubscription { subscription_id: id.into(), display_name: name.into(), tenant_id: tenant.into() }
+    }
+
+    #[test]
+    fn summary_rows_list_distinct_tenants_and_subscription_names_first() {
+        let model = ReportModel {
+            subscriptions: vec![
+                subscription("sub-1", "Prod", "tenant-1"),
+                subscription("sub-2", "", "tenant-2"),
+                subscription("sub-3", "Dev", "tenant-1"),
+            ],
+            ..Default::default()
+        };
+
+        let rows = summary_rows(&model);
+
+        assert_eq!(rows[0], pair("Tenant", "tenant-1, tenant-2".into()));
+        assert_eq!(rows[1], pair("Subscriptions", "Prod (sub-1); sub-2; Dev (sub-3)".into()));
+        assert_eq!(rows[2][0], cell("Flow observations"));
+    }
+
+    #[test]
+    fn summary_rows_say_when_subscription_data_is_missing() {
+        let rows = summary_rows(&ReportModel::default());
+
+        assert_eq!(rows[0], pair("Tenant", NOT_AVAILABLE.into()));
+        assert_eq!(rows[1], pair("Subscriptions", NOT_AVAILABLE.into()));
+    }
+
+    #[test]
+    fn monitoring_tables_total_the_text_width() {
+        assert_eq!(ACCOUNT_WIDTHS.iter().sum::<f64>(), 515.0);
+        assert_eq!(FLOW_LOG_WIDTHS.iter().sum::<f64>(), 515.0);
+    }
+
+    #[test]
+    fn account_row_shows_resource_group_and_subscription_name_or_id() {
+        let model = ReportModel {
+            accounts: vec![
+                StorageAccountInfo {
+                    name: "acct1".into(),
+                    resource_group: "rg-net".into(),
+                    subscription_id: "sub-1".into(),
+                    status: "Healthy".into(),
+                    ..Default::default()
+                },
+                StorageAccountInfo { name: "acct2".into(), subscription_id: "sub-9".into(), ..Default::default() },
+            ],
+            subscriptions: vec![subscription("sub-1", "Prod", "tenant-1")],
+            ..Default::default()
+        };
+
+        let rows = account_rows(&model);
+
+        assert_eq!(rows[0][1], cell("rg-net"));
+        assert_eq!(rows[0][2], cell("Prod"));
+        assert_eq!(rows[1][1], cell("-"), "empty resource group");
+        assert_eq!(rows[1][2], cell("sub-9"));
+        assert_eq!(rows[1][5], cell("-"), "no latest blob");
+    }
+
+    #[test]
+    fn account_row_shortens_latest_blob_like_short_time() {
+        let model = ReportModel {
+            accounts: vec![StorageAccountInfo {
+                name: "acct1".into(),
+                latest_blob_utc: Some("2026-10-18T12:00:00Z".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let rows = account_rows(&model);
+
+        assert_eq!(rows[0][5], cell("2026-10-18 12:00"));
+    }
+
+    #[test]
+    fn flow_log_row_uses_target_name_and_resource_group() {
+        let model = ReportModel {
+            flow_logs: vec![
+                FlowLogConfigInfo {
+                    storage_account: "acct1".into(),
+                    name: "fl-web".into(),
+                    target: "/subscriptions/s/resourceGroups/rg-app/providers/Microsoft.Network/networkSecurityGroups/web-nsg".into(),
+                    target_name: "web-nsg".into(),
+                    target_resource_group: "rg-app".into(),
+                    target_kind: "NSG".into(),
+                    enabled: true,
+                    status: "Healthy".into(),
+                    age_hours: Some(1.5),
+                    ..Default::default()
+                },
+                FlowLogConfigInfo {
+                    target: "/subscriptions/s/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/hub-vnet".into(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let rows = flow_log_rows(&model);
+
+        assert_eq!(rows[0][1], cell("fl-web"));
+        assert_eq!(rows[0][2], cell("web-nsg"));
+        assert_eq!(rows[0][3], cell("rg-app"));
+        assert_eq!(rows[0][7], cell("1.5 h"));
+        assert_eq!(rows[1][1], cell("-"), "empty flow log name");
+        assert_eq!(rows[1][2], cell("hub-vnet"));
+        assert_eq!(rows[1][3], cell("-"), "empty target resource group");
     }
 }

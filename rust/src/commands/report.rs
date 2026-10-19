@@ -12,9 +12,12 @@ use crate::azure::{AzureClient, read_flow_blobs};
 use crate::cli::ReportArgs;
 use crate::discovery::{InventoryRequest, load_inventory};
 use crate::flowlog::parse_flow_log;
-use crate::model::{InventoryResult, MAX_ROWS, ReportFilters, ReportModel, ReportWindow, SCHEMA_VERSION, flow_status};
+use crate::model::{
+    InventoryResult, MAX_ROWS, ReportFilters, ReportModel, ReportSubscription, ReportWindow, SCHEMA_VERSION,
+    flow_status,
+};
 use crate::report::{html, pdf};
-use crate::util::{iso, thousands};
+use crate::util::{file_name, iso, thousands};
 
 pub async fn run(args: &ReportArgs) -> Result<u8> {
     let report_format = args.report.to_ascii_lowercase();
@@ -84,6 +87,8 @@ pub async fn run(args: &ReportArgs) -> Result<u8> {
                     loaded.networks,
                     loaded.prefixes
                 ));
+                model.subscriptions = loaded.subscriptions;
+                model.notes.extend(loaded.notes);
                 // Assumes the inputs cover every storage network in the topology (same dedupe as Azure mode).
                 (Some(loaded.lookup), loaded.storage_accounts)
             }
@@ -126,6 +131,7 @@ pub async fn run(args: &ReportArgs) -> Result<u8> {
         log(&format!("Read {} blob(s).", read.blobs));
         let aggregator = aggregator.into_inner().unwrap_or_else(PoisonError::into_inner);
 
+        model.subscriptions = load.topology.subscriptions.iter().map(ReportSubscription::from).collect();
         model.accounts = load.result.accounts;
         model.flow_logs = load.result.flow_logs;
         aggregator.fill_model(&mut model, load.topology.subscriptions.len());
@@ -267,8 +273,4 @@ fn add_summary_notes(model: &mut ReportModel) {
                 .to_string(),
         );
     }
-}
-
-fn file_name(path: &Path) -> String {
-    path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default()
 }

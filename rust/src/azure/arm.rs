@@ -22,7 +22,7 @@ use serde::de::DeserializeOwned;
 use super::auth::RESOURCE_ARM;
 use super::client::AzureClient;
 use super::http::{describe_failure, ensure_success, send_with_retry, transport_failure};
-use crate::flowlog::paths::target_kind;
+use crate::flowlog::paths::{last_segment, resource_group_of, target_kind, target_name, target_resource_group};
 use crate::model::{
     AzureTopology, FlowLogConfigInfo, NicInfo, StorageAccountInfo, SubnetInfo, SubscriptionRef, VnetInfo,
 };
@@ -69,6 +69,7 @@ where
 pub struct SubscriptionItem {
     pub subscription_id: String,
     pub display_name: Option<String>,
+    pub tenant_id: Option<String>,
     pub state: Option<String>,
 }
 
@@ -201,7 +202,8 @@ pub fn enabled_subscriptions(items: Vec<SubscriptionItem>) -> Vec<SubscriptionRe
         .into_iter()
         .filter(|item| item.state.as_deref() == Some("Enabled"))
         .map(|item| SubscriptionRef {
-            display_name: item.display_name.unwrap_or_else(|| item.subscription_id.clone()),
+            display_name: item.display_name.unwrap_or_default(),
+            tenant_id: item.tenant_id.unwrap_or_default(),
             id: item.subscription_id,
         })
         .collect()
@@ -237,6 +239,8 @@ pub fn flow_log_config(subscription_id: &str, watcher_name: &str, item: FlowLogI
         storage_account: last_segment(&storage_id),
         network_watcher: watcher_name.to_string(),
         location: item.location.unwrap_or_default(),
+        target_name: target_name(&target),
+        target_resource_group: target_resource_group(&target),
         target,
         target_kind: kind,
         enabled: properties.enabled.unwrap_or(false),
@@ -289,21 +293,6 @@ pub fn nic(item: NicItem) -> NicInfo {
     }
 }
 
-/// Resource group from an ARM id: the segment after "resourceGroups" (case-insensitive). Empty when absent.
-pub fn resource_group_of(id: &str) -> String {
-    let parts: Vec<&str> = id.split('/').filter(|part| !part.is_empty()).collect();
-    parts
-        .windows(2)
-        .find(|pair| pair[0].eq_ignore_ascii_case("resourceGroups"))
-        .map(|pair| pair[1].to_string())
-        .unwrap_or_default()
-}
-
-/// Last segment of an ARM id, or the input when it has no segments.
-pub fn last_segment(id: &str) -> String {
-    id.rsplit('/').find(|part| !part.is_empty()).unwrap_or(id).to_string()
-}
-
 fn is_guid(value: &str) -> bool {
     let groups: Vec<&str> = value.split('-').collect();
     let lengths = [8, 4, 4, 4, 12];
@@ -353,7 +342,11 @@ async fn resolve_subscriptions(client: &AzureClient, requested: &[String]) -> Re
         }
         let item: SubscriptionItem =
             get_json(client, &format!("{ARM}/subscriptions/{id}?api-version={SUBSCRIPTIONS_API}")).await?;
-        result.push(SubscriptionRef { display_name: item.display_name.unwrap_or_else(|| id.clone()), id });
+        result.push(SubscriptionRef {
+            display_name: item.display_name.unwrap_or_default(),
+            tenant_id: item.tenant_id.unwrap_or_default(),
+            id,
+        });
     }
     Ok(result)
 }
@@ -404,10 +397,8 @@ pub async fn load_topology(client: &AzureClient, requested: &[String]) -> Result
                 return Err(error);
             };
             let detail = http.code.clone().unwrap_or_else(|| http.message.clone());
-            topology.warnings.push(format!(
-                "Subscription {} ({}): {} {}",
-                subscription.id, subscription.display_name, http.status, detail
-            ));
+            let name = if subscription.display_name.is_empty() { &subscription.id } else { &subscription.display_name };
+            topology.warnings.push(format!("Subscription {} ({name}): {} {detail}", subscription.id, http.status));
         }
     }
     Ok(topology)
@@ -434,6 +425,7 @@ mod tests {
         assert_eq!(subs.len(), 1);
         assert_eq!(subs[0].id, "00000000-0000-0000-0000-000000000001");
         assert_eq!(subs[0].display_name, "Prod Network");
+        assert_eq!(subs[0].tenant_id, "11111111-1111-1111-1111-111111111111");
     }
 
     #[test]
@@ -466,7 +458,11 @@ mod tests {
         assert!(first.enabled);
         assert_eq!(first.retention_days, 30);
         assert!(first.traffic_analytics);
+        assert_eq!(first.target_name, "web-nsg");
+        assert_eq!(first.target_resource_group, "rg-app");
         let second = &mapped[1];
+        assert_eq!(second.target_name, "hub-vnet");
+        assert_eq!(second.target_resource_group, "rg-net");
         assert_eq!(second.target_kind, "VNet");
         assert!(!second.enabled);
         assert!(!second.traffic_analytics);
@@ -500,14 +496,6 @@ mod tests {
         assert!(mapped[0].nsg_id.as_deref().unwrap().ends_with("/web-nsg"));
         assert!(mapped[1].private_ips.is_empty());
         assert_eq!(mapped[1].nsg_id, None);
-    }
-
-    #[test]
-    fn resource_group_and_last_segment_parse_arm_ids() {
-        let id = "/subscriptions/s/resourceGroups/My-RG/providers/Microsoft.Storage/storageAccounts/acct";
-        assert_eq!(resource_group_of(id), "My-RG");
-        assert_eq!(last_segment(id), "acct");
-        assert_eq!(resource_group_of("/subscriptions/s"), "");
     }
 
     #[test]
