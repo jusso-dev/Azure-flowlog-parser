@@ -54,7 +54,7 @@ public class StorageAccountConfigLoader
         try
         {
             var keyVaultUri = new Uri(keyVaultUrl);
-            var credential = new DefaultAzureCredential();
+            var credential = AzureFlowLogParser.Services.Discovery.AzureClients.CreateCredential();
             var client = new SecretClient(keyVaultUri, credential);
 
             var secret = await client.GetSecretAsync(secretName);

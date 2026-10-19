@@ -1,6 +1,7 @@
 using Azure.Identity;
 using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
+using AzureFlowLogParser.Services.Discovery;
 using Azure.Core.Diagnostics;
 using System.Diagnostics.Tracing;
 
@@ -28,7 +29,7 @@ public class AzureStorageClient
         {
             Console.Error.WriteLine($"Initializing Azure Storage client for: {storageAccountName}");
             Console.Error.WriteLine($"Storage URI: {storageUri}");
-            Console.Error.WriteLine("Authentication: Using DefaultAzureCredential");
+            Console.Error.WriteLine("Authentication: Using the shared credential chain (environment, managed identity, Azure CLI)");
             Console.Error.WriteLine("  Credential chain will attempt (in order):");
             Console.Error.WriteLine("    1. Environment variables (AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_TENANT_ID)");
             Console.Error.WriteLine("    2. Managed Identity (if running in Azure)");
@@ -37,28 +38,9 @@ public class AzureStorageClient
             Console.Error.WriteLine("    5. Visual Studio / VS Code credentials");
         }
 
-        // Use DefaultAzureCredential which supports:
-        // - Environment variables (AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_TENANT_ID)
-        // - Managed Identity (MSI) in Azure
-        // - Azure CLI credentials for local development
-        // - Visual Studio/VS Code credentials
-        var credentialOptions = new DefaultAzureCredentialOptions
-        {
-            ExcludeVisualStudioCredential = false,
-            ExcludeVisualStudioCodeCredential = false,
-            ExcludeAzureCliCredential = false,
-            ExcludeManagedIdentityCredential = false,
-            ExcludeEnvironmentCredential = false,
-            ExcludeAzurePowerShellCredential = false,
-            // Add retry options
-            Retry =
-            {
-                MaxRetries = 3,
-                NetworkTimeout = TimeSpan.FromSeconds(30)
-            }
-        };
-
-        var credential = new DefaultAzureCredential(credentialOptions);
+        // Same credential chain as the rest of the tool (see AzureClients.CreateCredentialOptions): environment,
+        // managed identity, then the Azure CLI session from `az login`.
+        var credential = AzureClients.CreateCredential();
 
         _blobServiceClient = new BlobServiceClient(storageUri, credential);
 

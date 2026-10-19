@@ -15,14 +15,7 @@ public sealed class AzureClients
 
     public AzureClients()
     {
-        Credential = new DefaultAzureCredential(new DefaultAzureCredentialOptions
-        {
-            Retry =
-            {
-                MaxRetries = 3,
-                NetworkTimeout = TimeSpan.FromSeconds(30)
-            }
-        });
+        Credential = CreateCredential();
         Arm = new ArmClient(Credential);
     }
 
@@ -34,5 +27,34 @@ public sealed class AzureClients
     {
         return _blobClients.GetOrAdd(storageAccountName, name =>
             new BlobServiceClient(new Uri($"https://{name}.blob.core.windows.net"), Credential));
+    }
+
+    /// <summary>
+    /// The one Entra ID credential for the app and its tests. Managed identity is tried first, so Azure hosts
+    /// need no configuration (AZURE_CLIENT_ID selects a user-assigned identity); a laptop falls through to the
+    /// Azure CLI session from `az login`.
+    /// </summary>
+    public static TokenCredential CreateCredential()
+    {
+        return new DefaultAzureCredential(CreateCredentialOptions());
+    }
+
+    /// <summary>
+    /// Options behind <see cref="CreateCredential"/>. Environment, managed identity and the Azure CLI stay enabled.
+    /// The Visual Studio and VS Code credentials are excluded: they come before the Azure CLI in the chain and can
+    /// return a different signed-in account, so `az login` has to win. The Rust tool uses the same order.
+    /// </summary>
+    public static DefaultAzureCredentialOptions CreateCredentialOptions()
+    {
+        return new DefaultAzureCredentialOptions
+        {
+            ExcludeVisualStudioCredential = true,
+            ExcludeVisualStudioCodeCredential = true,
+            Retry =
+            {
+                MaxRetries = 3,
+                NetworkTimeout = TimeSpan.FromSeconds(30)
+            }
+        };
     }
 }
