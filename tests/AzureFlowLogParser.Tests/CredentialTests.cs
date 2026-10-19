@@ -137,6 +137,10 @@ public class CredentialTests
         return Task.Run(async () =>
         {
             var context = await listener.GetContextAsync();
+            // Read the request before the response is written: Windows disposes HttpListenerRequest once the
+            // response is closed, and reading headers afterwards throws ObjectDisposedException.
+            var captured = new CapturedRequest(context.Request.Headers["X-IDENTITY-HEADER"], context.Request.Url!);
+
             var expiresOn = DateTimeOffset.UtcNow.AddHours(1).ToUnixTimeSeconds();
             var body = $$"""{"access_token":"{{FakeMsiToken}}","expires_on":"{{expiresOn}}","resource":"https://management.azure.com","token_type":"Bearer"}""";
 
@@ -145,7 +149,7 @@ public class CredentialTests
             await context.Response.OutputStream.WriteAsync(bytes);
             context.Response.Close();
 
-            return new CapturedRequest(context.Request.Headers["X-IDENTITY-HEADER"], context.Request.Url!);
+            return captured;
         });
     }
 
