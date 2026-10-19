@@ -136,17 +136,26 @@ public sealed class PdfLayout
         }
     }
 
+    /// <summary>Draws the header row. Header text wraps onto extra lines when a narrow column cannot hold it.</summary>
     private void DrawHeader(string[] headers, double[] widths, double fontSize)
     {
-        _page.FillRect(Margin, _top, ContentWidth, HeaderHeight, HeaderFill);
+        var lines = headers.Select((header, c) => PdfText.Wrap(header, widths[c] - 8, fontSize, bold: true).ToList()).ToList();
+        var lineHeight = fontSize + 2;
+        var height = Math.Max(HeaderHeight, lines.Max(l => l.Count) * lineHeight + 6);
+
+        _page.FillRect(Margin, _top, ContentWidth, height, HeaderFill);
         var x = Margin;
         for (var c = 0; c < headers.Length; c++)
         {
-            _page.Text(PdfText.Fit(headers[c], widths[c] - 8, fontSize, bold: true), x + 4, _top + 4, fontSize, PdfColor.White, bold: true);
+            for (var line = 0; line < lines[c].Count; line++)
+            {
+                _page.Text(lines[c][line], x + 4, _top + 4 + line * lineHeight, fontSize, PdfColor.White, bold: true);
+            }
+
             x += widths[c];
         }
 
-        _top += HeaderHeight;
+        _top += height;
     }
 
     private void Ensure(double height)

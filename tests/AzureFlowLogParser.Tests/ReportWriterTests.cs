@@ -198,6 +198,89 @@ public class ReportWriterTests
         Assert.Equal(1, exit);
     }
 
+    [Fact]
+    public void Report_model_serializes_subscriptions_and_flow_log_target_fields()
+    {
+        var model = SampleModel();
+        model.Subscriptions.Add(new ReportSubscription { SubscriptionId = "00000000-0000-0000-0000-000000000001", DisplayName = "Example Production (sample)", TenantId = "11111111-2222-3333-4444-555555555555" });
+        model.FlowLogs.Add(new FlowLogConfigInfo
+        {
+            StorageAccount = "stflowlogs01", Name = "fl-app", Target = "/subscriptions/x/resourceGroups/rg-net/providers/Microsoft.Network/networkSecurityGroups/nsg-app",
+            TargetName = "nsg-app", TargetResourceGroup = "rg-net", TargetKind = "NSG"
+        });
+
+        var json = JsonSerializer.Serialize(model, Serialization.AppJsonContext.Default.ReportModel);
+        using var doc = JsonDocument.Parse(json);
+
+        Assert.Equal(new[] { "schema", "generatedUtc", "source", "subscriptions", "window" }, doc.RootElement.EnumerateObject().Take(5).Select(p => p.Name).ToArray());
+        var subscription = doc.RootElement.GetProperty("subscriptions")[0];
+        Assert.Equal("00000000-0000-0000-0000-000000000001", subscription.GetProperty("subscriptionId").GetString());
+        Assert.Equal("Example Production (sample)", subscription.GetProperty("displayName").GetString());
+        Assert.Equal("11111111-2222-3333-4444-555555555555", subscription.GetProperty("tenantId").GetString());
+        var flowLog = doc.RootElement.GetProperty("flowLogs")[0];
+        Assert.Equal("nsg-app", flowLog.GetProperty("targetName").GetString());
+        Assert.Equal("rg-net", flowLog.GetProperty("targetResourceGroup").GetString());
+    }
+
+    [Fact]
+    public void Pdf_summary_lists_tenant_and_subscriptions_before_flow_observations()
+    {
+        var model = SampleModel();
+        model.Subscriptions.Add(new ReportSubscription { SubscriptionId = "00000000-0000-0000-0000-000000000001", DisplayName = "Example Production (sample)", TenantId = "11111111-2222-3333-4444-555555555555" });
+
+        var text = ReadPdfText(model);
+
+        Assert.True(text.IndexOf("(Tenant) Tj", StringComparison.Ordinal) < text.IndexOf("(Subscriptions) Tj", StringComparison.Ordinal));
+        Assert.True(text.IndexOf("(Subscriptions) Tj", StringComparison.Ordinal) < text.IndexOf("(Flow observations) Tj", StringComparison.Ordinal));
+        Assert.Contains("(11111111-2222-3333-4444-555555555555) Tj", text);
+        Assert.Contains("(Example Production \\(sample\\) \\(00000000-0000-0000-0000-000000000001\\)) Tj", text);
+    }
+
+    [Fact]
+    public void Pdf_summary_says_not_available_for_offline_input_without_topology_subscriptions()
+    {
+        var text = ReadPdfText(SampleModel());
+
+        Assert.Equal(2, text.Split("(not available \\(offline input\\)) Tj").Length - 1);
+    }
+
+    [Fact]
+    public void Pdf_monitoring_tables_use_contract_headers()
+    {
+        var model = SampleModel();
+        model.Subscriptions.Add(new ReportSubscription { SubscriptionId = "00000000-0000-0000-0000-000000000001", DisplayName = "Example Production (sample)", TenantId = "11111111-2222-3333-4444-555555555555" });
+        model.Accounts.Add(new StorageAccountInfo
+        {
+            SubscriptionId = "00000000-0000-0000-0000-000000000001", Name = "stflowlogs01", ResourceGroup = "rg-data", Status = FlowStatus.Healthy, FlowLogConfigs = 1,
+            LatestBlobUtc = "2026-10-18T13:00:00Z", ObservedTarget = "/subscriptions/x/resourceGroups/rg-net/providers/Microsoft.Network/networkSecurityGroups/nsg-app"
+        });
+        model.FlowLogs.Add(new FlowLogConfigInfo
+        {
+            StorageAccount = "stflowlogs01", Name = "fl-app", Target = "/subscriptions/x/resourceGroups/rg-net/providers/Microsoft.Network/networkSecurityGroups/nsg-app",
+            TargetName = "nsg-app", TargetResourceGroup = "rg-net", TargetKind = "NSG", Enabled = true, Status = FlowStatus.Healthy, AgeHours = 0.5
+        });
+
+        var text = ReadPdfText(model);
+
+        // A header is drawn whole when it fits its column, otherwise word by word on wrapped lines.
+        foreach (var header in new[] { "Storage account", "Resource group", "Subscription", "Status", "Configs", "Latest blob", "Unmanaged source", "Flow log", "Target", "Target RG", "Kind", "Enabled", "Age" })
+        {
+            Assert.True(text.Contains($"({header}) Tj") || header.Split(' ').All(word => text.Contains($"({word}) Tj")), $"Header not drawn: {header}");
+        }
+
+        Assert.Contains("(rg-data) Tj", text);
+        Assert.Contains("(rg-net) Tj", text);
+        Assert.Contains("(fl-app) Tj", text);
+        Assert.Contains("(nsg-app) Tj", text);
+    }
+
+    private static string ReadPdfText(ReportModel model)
+    {
+        var path = Path.Combine(TestPaths.NewTempDirectory(), "report.pdf");
+        PdfReportWriter.Write(model, path);
+        return Encoding.Latin1.GetString(File.ReadAllBytes(path));
+    }
+
     private static string? FindOnPath(string tool)
     {
         foreach (var dir in (Environment.GetEnvironmentVariable("PATH") ?? string.Empty).Split(Path.PathSeparator))

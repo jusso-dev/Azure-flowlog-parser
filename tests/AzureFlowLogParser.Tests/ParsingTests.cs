@@ -79,6 +79,17 @@ public class ParsingTests
         Assert.Equal(expected, FlowLogPaths.TargetKind(target));
     }
 
+    [Theory]
+    [InlineData("/subscriptions/x/resourceGroups/rg-net/providers/Microsoft.Network/networkSecurityGroups/nsg-app", "nsg-app", "rg-net")]
+    [InlineData("/subscriptions/x/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/vnet-hub", "vnet-hub", "rg-net")]
+    [InlineData("/SUBSCRIPTIONS/X/RESOURCEGROUPS/RG-NET/PROVIDERS/MICROSOFT.NETWORK/VIRTUALNETWORKS/VNET-HUB", "VNET-HUB", "RG-NET")]
+    [InlineData("/subscriptions/x/providers/Microsoft.Network/virtualNetworks/vnet-hub", "vnet-hub", "")]
+    public void Target_name_and_resource_group_come_from_the_arm_id(string target, string expectedName, string expectedGroup)
+    {
+        Assert.Equal(expectedName, FlowLogPaths.TargetName(target));
+        Assert.Equal(expectedGroup, FlowLogPaths.TargetResourceGroup(target));
+    }
+
     [Fact]
     public void Status_worst_picks_most_severe()
     {

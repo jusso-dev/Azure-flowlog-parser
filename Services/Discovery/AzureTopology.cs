@@ -20,7 +20,8 @@ public sealed class AzureTopology
     public List<string> Warnings { get; } = new();
 }
 
-public sealed record SubscriptionRef(string Id, string DisplayName);
+/// <summary>A scanned subscription. DisplayName and TenantId are empty when ARM does not return them.</summary>
+public sealed record SubscriptionRef(string Id, string DisplayName, string TenantId);
 
 public sealed record VnetInfo(
     string Id,
@@ -60,7 +61,8 @@ public sealed class ArmTopologyLoader
             }
             catch (RequestFailedException ex)
             {
-                topology.Warnings.Add($"Subscription {subscription.Id} ({subscription.DisplayName}): {ex.Status} {ex.ErrorCode ?? ex.Message}");
+                var label = string.IsNullOrEmpty(subscription.DisplayName) ? subscription.Id : $"{subscription.Id} ({subscription.DisplayName})";
+                topology.Warnings.Add($"Subscription {label}: {ex.Status} {ex.ErrorCode ?? ex.Message}");
             }
         }
 
@@ -77,7 +79,8 @@ public sealed class ArmTopologyLoader
             {
                 var resource = _armClient.GetSubscriptionResource(SubscriptionResource.CreateResourceIdentifier(id));
                 var response = await resource.GetAsync(cancellationToken);
-                result.Add(new SubscriptionRef(id, response.Value.Data.DisplayName ?? id));
+                var data = response.Value.Data;
+                result.Add(new SubscriptionRef(id, data.DisplayName ?? string.Empty, data.TenantId?.ToString() ?? string.Empty));
             }
 
             return result;
@@ -87,7 +90,8 @@ public sealed class ArmTopologyLoader
         {
             if (subscription.Data.State == SubscriptionState.Enabled)
             {
-                result.Add(new SubscriptionRef(subscription.Data.SubscriptionId, subscription.Data.DisplayName ?? subscription.Data.SubscriptionId));
+                var data = subscription.Data;
+                result.Add(new SubscriptionRef(data.SubscriptionId, data.DisplayName ?? string.Empty, data.TenantId?.ToString() ?? string.Empty));
             }
         }
 
@@ -131,6 +135,8 @@ public sealed class ArmTopologyLoader
                     NetworkWatcher = watcher.Id.Name,
                     Location = data.Location.ToString() ?? string.Empty,
                     Target = target,
+                    TargetName = FlowLogPaths.TargetName(target),
+                    TargetResourceGroup = FlowLogPaths.TargetResourceGroup(target),
                     TargetKind = FlowLogPaths.TargetKind(target),
                     Enabled = data.Enabled ?? false,
                     RetentionDays = data.RetentionPolicy?.Days ?? 0,

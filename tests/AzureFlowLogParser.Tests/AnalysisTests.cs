@@ -218,6 +218,82 @@ public class AnalysisTests
         Assert.Throws<InvalidDataException>(() => TopologyFile.Load(path));
     }
 
+    [Fact]
+    public void Topology_file_without_subscriptions_lists_none()
+    {
+        var result = TopologyFile.Load(TestPaths.Topology);
+
+        Assert.Empty(result.Subscriptions);
+        Assert.Empty(result.SubscriptionNotes);
+    }
+
+    [Fact]
+    public void Topology_file_reads_subscriptions_in_file_order_and_ignores_unknown_keys()
+    {
+        var path = Path.Combine(TestPaths.NewTempDirectory(), "subscriptions.json");
+        File.WriteAllText(path, """
+            {
+              "version": 2,
+              "networks": [ { "name": "stflowlogs01", "kind": "storage", "prefixes": ["10.0.1.0/24"] } ],
+              "subscriptions": [
+                { "subscriptionId": "00000000-0000-0000-0000-00000000000b", "displayName": "Second", "tenantId": "tenant-2", "owner": "ignored" },
+                { "subscriptionId": "00000000-0000-0000-0000-00000000000a", "displayName": "First", "tenantId": "tenant-1" }
+              ]
+            }
+            """);
+
+        var result = TopologyFile.Load(path);
+
+        Assert.Equal(
+            new[] { ("00000000-0000-0000-0000-00000000000b", "Second", "tenant-2"), ("00000000-0000-0000-0000-00000000000a", "First", "tenant-1") },
+            result.Subscriptions.Select(s => (s.SubscriptionId, s.DisplayName, s.TenantId)).ToArray());
+        Assert.Equal(new[] { "stflowlogs01" }, result.StorageAccounts);
+        Assert.Empty(result.SubscriptionNotes);
+    }
+
+    [Fact]
+    public void Topology_file_skips_malformed_subscription_entries_with_a_note()
+    {
+        var path = Path.Combine(TestPaths.NewTempDirectory(), "malformed.json");
+        File.WriteAllText(path, """
+            {
+              "networks": [],
+              "subscriptions": [
+                42,
+                { "displayName": "No id" },
+                { "subscriptionId": "  ", "displayName": "Blank id" },
+                { "subscriptionId": "00000000-0000-0000-0000-00000000000a" }
+              ]
+            }
+            """);
+
+        var result = TopologyFile.Load(path);
+
+        Assert.Equal(
+            new[] { ("00000000-0000-0000-0000-00000000000a", string.Empty, string.Empty) },
+            result.Subscriptions.Select(s => (s.SubscriptionId, s.DisplayName, s.TenantId)).ToArray());
+        Assert.Equal(
+            new[]
+            {
+                "Topology subscription entry ignored: entry 1 is not an object.",
+                "Topology subscription entry ignored: entry 2 has no subscriptionId.",
+                "Topology subscription entry ignored: entry 3 has no subscriptionId."
+            },
+            result.SubscriptionNotes);
+    }
+
+    [Fact]
+    public void Topology_file_with_non_array_subscriptions_names_the_file_in_the_error()
+    {
+        var path = Path.Combine(TestPaths.NewTempDirectory(), "not-array.json");
+        File.WriteAllText(path, """{"networks":[],"subscriptions":{"subscriptionId":"00000000-0000-0000-0000-00000000000a"}}""");
+
+        var error = Assert.Throws<InvalidDataException>(() => TopologyFile.Load(path));
+
+        Assert.StartsWith("topology file not-array.json: ", error.Message, StringComparison.Ordinal);
+        Assert.IsType<System.Text.Json.JsonException>(error.InnerException);
+    }
+
     [Theory]
     [InlineData("443", new[] { 443 })]
     [InlineData("443,8000-8001", new[] { 443, 8000, 8001 })]

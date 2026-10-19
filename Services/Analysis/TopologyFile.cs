@@ -7,16 +7,28 @@ namespace AzureFlowLogParser.Services.Analysis;
 
 /// <summary>
 /// Offline topology: maps address prefixes to storage accounts or unlogged VNets for --input runs.
-/// Shape: { "networks": [ { "name": "stflowlogs01", "kind": "storage", "prefixes": ["10.10.0.0/16"] } ] }
+/// Shape: { "networks": [ { "name": "stflowlogs01", "kind": "storage", "prefixes": ["10.10.0.0/16"] } ],
+///          "subscriptions": [ { "subscriptionId": "...", "displayName": "...", "tenantId": "..." } ] }
+/// "subscriptions" is optional. Entries are read leniently so one malformed entry is noted, not fatal.
 /// </summary>
 public static class TopologyFile
 {
-    public sealed record Result(Ipv4Lookup Lookup, int Networks, int Prefixes, int SkippedPrefixes, IReadOnlyList<string> StorageAccounts);
+    public sealed record Result(
+        Ipv4Lookup Lookup,
+        int Networks,
+        int Prefixes,
+        int SkippedPrefixes,
+        IReadOnlyList<string> StorageAccounts,
+        IReadOnlyList<ReportSubscription> Subscriptions,
+        IReadOnlyList<string> SubscriptionNotes);
 
     public sealed class Document
     {
         [JsonPropertyName("networks")]
         public List<Network> Networks { get; set; } = new();
+
+        [JsonPropertyName("subscriptions")]
+        public List<JsonElement>? Subscriptions { get; set; }
     }
 
     public sealed class Network
@@ -38,8 +50,17 @@ public static class TopologyFile
             throw new FileNotFoundException($"Topology file not found: {path}");
         }
 
-        var document = JsonSerializer.Deserialize(File.ReadAllText(path), AppJsonContext.Default.Document)
-            ?? throw new InvalidDataException($"Topology file is empty: {path}");
+        Document document;
+        try
+        {
+            document = JsonSerializer.Deserialize(File.ReadAllText(path), AppJsonContext.Default.Document)
+                ?? throw new InvalidDataException($"Topology file is empty: {path}");
+        }
+        catch (JsonException ex)
+        {
+            // The JSON message does not name the file, so the error does.
+            throw new InvalidDataException($"topology file {Path.GetFileName(path)}: {ex.Message}", ex);
+        }
 
         var lookup = new Ipv4Lookup();
         var prefixes = 0;
@@ -89,6 +110,47 @@ public static class TopologyFile
             }
         }
 
-        return new Result(lookup, document.Networks.Count, prefixes, skipped, storageAccounts);
+        var (subscriptions, subscriptionNotes) = ReadSubscriptions(document.Subscriptions ?? []);
+
+        return new Result(lookup, document.Networks.Count, prefixes, skipped, storageAccounts, subscriptions, subscriptionNotes);
+    }
+
+    private static (List<ReportSubscription> Subscriptions, List<string> Notes) ReadSubscriptions(List<JsonElement> entries)
+    {
+        var subscriptions = new List<ReportSubscription>();
+        var notes = new List<string>();
+
+        for (var i = 0; i < entries.Count; i++)
+        {
+            var entry = entries[i];
+            var position = i + 1;
+            if (entry.ValueKind != JsonValueKind.Object)
+            {
+                notes.Add($"Topology subscription entry ignored: entry {position} is not an object.");
+                continue;
+            }
+
+            var subscriptionId = TextProperty(entry, "subscriptionId");
+            if (string.IsNullOrWhiteSpace(subscriptionId))
+            {
+                notes.Add($"Topology subscription entry ignored: entry {position} has no subscriptionId.");
+                continue;
+            }
+
+            subscriptions.Add(new ReportSubscription
+            {
+                SubscriptionId = subscriptionId,
+                DisplayName = TextProperty(entry, "displayName") ?? string.Empty,
+                TenantId = TextProperty(entry, "tenantId") ?? string.Empty
+            });
+        }
+
+        return (subscriptions, notes);
+    }
+
+    /// <summary>A string property, or null when it is missing or not a string.</summary>
+    private static string? TextProperty(JsonElement entry, string name)
+    {
+        return entry.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
     }
 }

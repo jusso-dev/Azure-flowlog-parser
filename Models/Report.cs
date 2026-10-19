@@ -9,6 +9,7 @@ public sealed class ReportModel
     public int Schema { get; set; } = 1;
     public string GeneratedUtc { get; set; } = string.Empty;
     public string Source { get; set; } = "azure";
+    public List<ReportSubscription> Subscriptions { get; set; } = new();
     public ReportWindow Window { get; set; } = new();
     public ReportFilters Filters { get; set; } = new();
     public ReportSummary Summary { get; set; } = new();
@@ -17,6 +18,16 @@ public sealed class ReportModel
     public List<StorageAccountInfo> Accounts { get; set; } = new();
     public List<FlowLogConfigInfo> FlowLogs { get; set; } = new();
     public List<string> Notes { get; set; } = new();
+}
+
+/// <summary>
+/// A subscription the report covers: scanned in Azure mode, or listed in the topology file for offline input.
+/// </summary>
+public sealed class ReportSubscription
+{
+    public string SubscriptionId { get; set; } = string.Empty;
+    public string DisplayName { get; set; } = string.Empty;
+    public string TenantId { get; set; } = string.Empty;
 }
 
 public sealed class ReportWindow

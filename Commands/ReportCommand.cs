@@ -195,8 +195,10 @@ public static class ReportCommand
                     localLookup = topology.Lookup;
                     // Assumes the inputs cover every storage network in the topology (same dedupe as Azure mode).
                     localReadAccounts = topology.StorageAccounts.ToArray();
+                    model.Subscriptions = topology.Subscriptions.ToList();
                     model.Notes.Add($"Offline topology from {Path.GetFileName(topologyPath)}: {topology.Networks} network(s), {topology.Prefixes} prefix(es)" +
                         (topology.SkippedPrefixes > 0 ? $", {topology.SkippedPrefixes} non-IPv4 prefix(es) skipped." : "."));
+                    model.Notes.AddRange(topology.SubscriptionNotes);
                 }
                 else
                 {
@@ -228,6 +230,9 @@ public static class ReportCommand
                 var aggregator = new TrafficAggregator(filter, since, until, lookup, readAccounts);
                 var read = await TrafficReader.ReadAzureAsync(clients, load.Result, since!.Value, until!.Value, aggregator, concurrency, log, cancellationToken);
 
+                model.Subscriptions = load.Topology.Subscriptions
+                    .Select(s => new ReportSubscription { SubscriptionId = s.Id, DisplayName = s.DisplayName, TenantId = s.TenantId })
+                    .ToList();
                 model.Accounts = load.Result.Accounts;
                 model.FlowLogs = load.Result.FlowLogs;
                 aggregator.FillModel(model, load.Topology.Subscriptions.Count);

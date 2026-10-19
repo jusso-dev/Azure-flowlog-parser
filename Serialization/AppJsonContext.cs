@@ -13,6 +13,7 @@ namespace AzureFlowLogParser.Serialization;
 [JsonSerializable(typeof(DenormalizedFlowRecord))]
 [JsonSerializable(typeof(List<DenormalizedFlowRecord>))]
 [JsonSerializable(typeof(ReportModel))]
+[JsonSerializable(typeof(ReportSubscription))]
 [JsonSerializable(typeof(TopologyFile.Document))]
 public partial class AppJsonContext : JsonSerializerContext
 {

@@ -55,6 +55,8 @@ public sealed class FlowLogConfigInfo
     public string NetworkWatcher { get; set; } = string.Empty;
     public string Location { get; set; } = string.Empty;
     public string Target { get; set; } = string.Empty;
+    public string TargetName { get; set; } = string.Empty;
+    public string TargetResourceGroup { get; set; } = string.Empty;
     public string TargetKind { get; set; } = "Other";
     public bool Enabled { get; set; }
     public int RetentionDays { get; set; }

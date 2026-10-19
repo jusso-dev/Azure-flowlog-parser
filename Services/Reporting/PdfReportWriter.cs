@@ -36,16 +36,17 @@ public static class PdfReportWriter
         layout.Heading("Summary");
         var rows = new List<PdfCell[]>
         {
+            Row("Tenant", TenantText(model)),
+            Row("Subscriptions", SubscriptionText(model)),
             Row("Flow observations", s.Flows.ToString("N0")),
             Row("Allowed / denied", $"{s.Allowed:N0} / {s.Denied:N0}"),
             Row("Bytes / packets", $"{FormatBytes(s.Bytes)} / {s.Packets:N0}"),
             Row("Storage accounts read", s.StorageAccounts.ToString("N0")),
             Row("Scopes in report", s.Scopes.ToString("N0")),
-            Row("Subscriptions", s.Subscriptions.ToString("N0")),
             Row("Unique source / destination IPs", $"{s.UniqueSourceIps:N0} / {s.UniqueDestinationIps:N0}"),
             Row("Allowed inbound duplicates skipped", s.ObservationsSkipped.ToString("N0"))
         };
-        layout.Table(["Measure", "Value"], [220, 295], rows, fontSize: 8.5);
+        layout.Table(["Measure", "Value"], [170, 345], rows, fontSize: 8.5);
     }
 
     private static void WriteMonitoring(PdfLayout layout, ReportModel model)
@@ -60,24 +61,29 @@ public static class PdfReportWriter
         var accountRows = model.Accounts
             .Select(a => new[]
             {
-                Cell(a.Name), Cell(a.SubscriptionId), Cell(a.Status), Cell(a.FlowLogConfigs.ToString()),
-                Cell(a.LatestBlobUtc ?? "-"), Cell(a.ObservedTarget is null ? "-" : LastSegment(a.ObservedTarget))
+                Cell(a.Name), Cell(a.ResourceGroup.Length > 0 ? a.ResourceGroup : "-"), Cell(SubscriptionName(model, a.SubscriptionId)),
+                Cell(a.Status), Cell(a.FlowLogConfigs.ToString()), Cell(a.LatestBlobUtc is null ? "-" : ShortTime(a.LatestBlobUtc)),
+                Cell(a.ObservedTarget is null ? "-" : LastSegment(a.ObservedTarget))
             })
             .ToList();
-        layout.Table(["Storage account", "Subscription", "Status", "Configs", "Latest blob (UTC)", "Unmanaged source"],
-            [92, 125, 70, 48, 105, 75], accountRows);
+        layout.Table(["Storage account", "Resource group", "Subscription", "Status", "Configs", "Latest blob", "Unmanaged source"],
+            [88, 84, 110, 60, 38, 75, 60], accountRows);
 
         var logRows = model.FlowLogs
             .Select(f => new[]
             {
-                Cell(f.StorageAccount), Cell(LastSegment(f.Target)), Cell(f.TargetKind), Cell(f.Enabled ? "yes" : "no"),
-                Cell(f.Status), Cell(f.AgeHours is null ? "-" : $"{f.AgeHours:0.0} h")
+                Cell(f.StorageAccount), Cell(f.Name.Length > 0 ? f.Name : "-"),
+                Cell(f.TargetName.Length > 0 ? f.TargetName : LastSegment(f.Target)),
+                Cell(f.TargetResourceGroup.Length > 0 ? f.TargetResourceGroup : "-"),
+                Cell(f.TargetKind), Cell(f.Enabled ? "yes" : "no"), Cell(f.Status),
+                Cell(f.AgeHours is null ? "-" : $"{f.AgeHours:0.0} h")
             })
             .ToList();
         if (logRows.Count > 0)
         {
             layout.Space(4);
-            layout.Table(["Storage account", "Target", "Kind", "Enabled", "Status", "Age"], [110, 165, 60, 60, 80, 40], logRows);
+            layout.Table(["Storage account", "Flow log", "Target", "Target RG", "Kind", "Enabled", "Status", "Age"],
+                [78, 92, 88, 92, 34, 38, 58, 35], logRows);
         }
     }
 
@@ -191,6 +197,30 @@ public static class PdfReportWriter
     {
         var scope = model.Scopes.FirstOrDefault(s => s.Id == scopeId);
         return scope?.Label ?? scopeId;
+    }
+
+    private const string NotAvailable = "not available (offline input)";
+
+    /// <summary>Distinct tenant ids in report order, or the offline fallback when none is known.</summary>
+    private static string TenantText(ReportModel model)
+    {
+        var tenants = model.Subscriptions.Select(s => s.TenantId).Where(t => t.Length > 0).Distinct().ToList();
+        return tenants.Count > 0 ? string.Join(", ", tenants) : NotAvailable;
+    }
+
+    /// <summary>"displayName (subscriptionId)" per subscription, or the id alone when it has no display name.</summary>
+    private static string SubscriptionText(ReportModel model)
+    {
+        return model.Subscriptions.Count > 0
+            ? string.Join("; ", model.Subscriptions.Select(s => s.DisplayName.Length > 0 ? $"{s.DisplayName} ({s.SubscriptionId})" : s.SubscriptionId))
+            : NotAvailable;
+    }
+
+    /// <summary>Display name of a subscription in the report, falling back to its id.</summary>
+    private static string SubscriptionName(ReportModel model, string subscriptionId)
+    {
+        var subscription = model.Subscriptions.FirstOrDefault(s => string.Equals(s.SubscriptionId, subscriptionId, StringComparison.OrdinalIgnoreCase));
+        return subscription is not null && subscription.DisplayName.Length > 0 ? subscription.DisplayName : subscriptionId;
     }
 
     private static string LastSegment(string armId)
