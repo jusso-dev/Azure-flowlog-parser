@@ -168,6 +168,7 @@ class Program
 
         // Discovery, monitoring and traffic report subcommands
         rootCommand.Add(DiscoverCommand.Create());
+        rootCommand.Add(DiagnoseCommand.Create());
         rootCommand.Add(ReportCommand.Create());
 
         rootCommand.SetAction(async (ParseResult parseResult, CancellationToken cancellationToken) =>

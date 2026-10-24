@@ -3,6 +3,7 @@ mod azure;
 mod cli;
 mod commands;
 mod config;
+mod diagnosis;
 mod discovery;
 mod flowlog;
 mod model;
@@ -20,6 +21,7 @@ async fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match &cli.command {
         Some(Command::Discover(args)) => commands::discover::run(args).await,
+        Some(Command::Diagnose(args)) => commands::diagnose::run(args).await,
         Some(Command::Report(args)) => commands::report::run(args).await,
         None => commands::parse::run(&cli.parse).await,
     };

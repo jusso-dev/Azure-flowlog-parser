@@ -73,7 +73,8 @@ public class ParsingTests
     [Theory]
     [InlineData("/subscriptions/x/resourceGroups/rg/providers/Microsoft.Network/networkSecurityGroups/n", "NSG")]
     [InlineData("/subscriptions/x/resourceGroups/rg/providers/Microsoft.Network/virtualNetworks/v", "VNet")]
-    [InlineData("/subscriptions/x/resourceGroups/rg/providers/Microsoft.Network/networkInterfaces/nic", "Other")]
+    [InlineData("/subscriptions/x/resourceGroups/rg/providers/Microsoft.Network/networkInterfaces/nic", "NIC")]
+    [InlineData("/subscriptions/x/resourceGroups/rg/providers/Microsoft.Network/virtualNetworks/v/subnets/app", "Subnet")]
     public void Target_kind_is_derived_from_resource_type(string target, string expected)
     {
         Assert.Equal(expected, FlowLogPaths.TargetKind(target));

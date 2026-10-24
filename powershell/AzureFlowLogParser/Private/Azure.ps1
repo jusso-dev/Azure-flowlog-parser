@@ -81,13 +81,18 @@ function Get-FlowLogAzSubscriptionData {
     $scope = @('--subscription', $SubscriptionId)
 
     $storageAccounts = @(foreach ($account in @(Invoke-FlowLogAzCli -Arguments (@('storage', 'account', 'list') + $scope))) {
+        $access = Get-FlowLogStorageAccess -Account $account
         [pscustomobject]@{
-            SubscriptionId = $SubscriptionId
-            Name           = [string](Get-FlowLogProperty -Object $account -Name 'name')
-            ResourceGroup  = [string](Get-FlowLogProperty -Object $account -Name 'resourceGroup')
-            Location       = [string](Get-FlowLogProperty -Object $account -Name 'location')
-            Kind           = [string](Get-FlowLogProperty -Object $account -Name 'kind')
-            SkuName        = [string](Get-FlowLogProperty -Object (Get-FlowLogProperty -Object $account -Name 'sku') -Name 'name')
+            SubscriptionId        = $SubscriptionId
+            Name                  = [string](Get-FlowLogProperty -Object $account -Name 'name')
+            ResourceGroup         = [string](Get-FlowLogProperty -Object $account -Name 'resourceGroup')
+            Location              = [string](Get-FlowLogProperty -Object $account -Name 'location')
+            Kind                  = [string](Get-FlowLogProperty -Object $account -Name 'kind')
+            SkuName               = [string](Get-FlowLogProperty -Object (Get-FlowLogProperty -Object $account -Name 'sku') -Name 'name')
+            PublicNetworkAccess   = $access.PublicNetworkAccess
+            NetworkDefaultAction  = $access.NetworkDefaultAction
+            AllowsTrustedServices = $access.AllowsTrustedServices
+            AllowSharedKeyAccess  = $access.AllowSharedKeyAccess
         }
     })
 
@@ -95,10 +100,15 @@ function Get-FlowLogAzSubscriptionData {
     $watchers = @(Invoke-FlowLogAzCli -Arguments (@('network', 'watcher', 'list') + $scope))
     $watcherNames = @{}
     $locations = [System.Collections.Generic.List[string]]::new()
+    $networkWatchers = [System.Collections.Generic.List[object]]::new()
     foreach ($watcher in $watchers) {
         $location = [string](Get-FlowLogProperty -Object $watcher -Name 'location')
+        $name = [string](Get-FlowLogProperty -Object $watcher -Name 'name')
+        if (-not [string]::IsNullOrWhiteSpace($location)) {
+            $networkWatchers.Add([pscustomobject]@{ SubscriptionId = $SubscriptionId; Name = $name; Location = $location })
+        }
         if ([string]::IsNullOrWhiteSpace($location) -or $watcherNames.ContainsKey($location)) { continue }
-        $watcherNames[$location] = [string](Get-FlowLogProperty -Object $watcher -Name 'name')
+        $watcherNames[$location] = $name
         $locations.Add($location)
     }
     $flowLogs = @(foreach ($location in $locations) {
@@ -128,9 +138,23 @@ function Get-FlowLogAzSubscriptionData {
     })
 
     $networkInterfaces = @(foreach ($nic in @(Invoke-FlowLogAzCli -Arguments (@('network', 'nic', 'list') + $scope))) {
+        $subnetId = ''
+        foreach ($ip in @(Get-FlowLogProperty -Object $nic -Name 'ipConfigurations')) {
+            $subnet = Get-FlowLogProperty -Object $ip -Name 'subnet'
+            if ($null -eq $subnet) {
+                $subnet = Get-FlowLogProperty -Object (Get-FlowLogProperty -Object $ip -Name 'properties') -Name 'subnet'
+            }
+            $candidate = Get-FlowLogProperty -Object $subnet -Name 'id'
+            if ($null -ne $candidate -and -not [string]::IsNullOrWhiteSpace([string]$candidate)) {
+                $subnetId = [string]$candidate
+                break
+            }
+        }
         [pscustomobject]@{
             Name       = [string](Get-FlowLogProperty -Object $nic -Name 'name')
             Id         = [string](Get-FlowLogProperty -Object $nic -Name 'id')
+            Location   = [string](Get-FlowLogProperty -Object $nic -Name 'location')
+            SubnetId   = $subnetId
             NsgId      = [string](Get-FlowLogProperty -Object (Get-FlowLogProperty -Object $nic -Name 'networkSecurityGroup') -Name 'id')
             PrivateIps = @(@(Get-FlowLogProperty -Object $nic -Name 'ipConfigurations') | ForEach-Object { Get-FlowLogProperty -Object $_ -Name 'privateIpAddress' } | Where-Object { $_ })
         }
@@ -144,7 +168,51 @@ function Get-FlowLogAzSubscriptionData {
         FlowLogs          = $flowLogs
         VirtualNetworks   = $virtualNetworks
         NetworkInterfaces = $networkInterfaces
+        NetworkWatchers   = $networkWatchers.ToArray()
     }
+}
+
+function Get-FlowLogStorageAccess {
+    # Firewall and shared-key settings. A missing networkAcls leaves AllowsTrustedServices null so diagnose does not guess.
+    param($Account)
+
+    $properties = Get-FlowLogProperty -Object $Account -Name 'properties'
+    $public = Get-FlowLogProperty -Object $Account -Name 'publicNetworkAccess'
+    if ($null -eq $public) { $public = Get-FlowLogProperty -Object $properties -Name 'publicNetworkAccess' }
+    $shared = Get-FlowLogProperty -Object $Account -Name 'allowSharedKeyAccess'
+    if ($null -eq $shared) { $shared = Get-FlowLogProperty -Object $properties -Name 'allowSharedKeyAccess' }
+    $acls = Get-FlowLogProperty -Object $Account -Name 'networkAcls'
+    if ($null -eq $acls) { $acls = Get-FlowLogProperty -Object $properties -Name 'networkAcls' }
+
+    $defaultAction = $null
+    $trusted = $null
+    if ($null -ne $acls) {
+        $defaultAction = Get-FlowLogProperty -Object $acls -Name 'defaultAction'
+        $bypass = Get-FlowLogProperty -Object $acls -Name 'bypass'
+        $trusted = $false
+        if ($null -ne $bypass) {
+            $trusted = @("$bypass".Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ -eq 'AzureServices' }).Count -gt 0
+        }
+    }
+
+    [pscustomobject]@{
+        PublicNetworkAccess   = if ($null -eq $public) { $null } else { [string]$public }
+        NetworkDefaultAction  = if ($null -eq $defaultAction) { $null } else { [string]$defaultAction }
+        AllowsTrustedServices = $trusted
+        AllowSharedKeyAccess  = ConvertTo-FlowLogNullableBool -Value $shared
+    }
+}
+
+function ConvertTo-FlowLogNullableBool {
+    # ConvertFrom-Json yields a real bool. A string "false" must not become $true via [bool].
+    param($Value)
+
+    if ($null -eq $Value) { return $null }
+    if ($Value -is [bool]) { return $Value }
+    $text = "$Value"
+    if ($text -eq 'true') { return $true }
+    if ($text -eq 'false') { return $false }
+    return $null
 }
 
 function ConvertTo-FlowLogConfig {
@@ -155,6 +223,16 @@ function ConvertTo-FlowLogConfig {
     $storage = ConvertTo-FlowLogStorageRef -StorageId ([string](Get-FlowLogProperty -Object $FlowLog -Name 'storageId'))
     $retention = Get-FlowLogProperty -Object (Get-FlowLogProperty -Object $FlowLog -Name 'retentionPolicy') -Name 'days'
     $analytics = Get-FlowLogProperty -Object (Get-FlowLogProperty -Object $FlowLog -Name 'flowAnalyticsConfiguration') -Name 'networkWatcherFlowAnalyticsConfiguration'
+    $provisioning = Get-FlowLogProperty -Object $FlowLog -Name 'provisioningState'
+    if ($null -eq $provisioning) {
+        $provisioning = Get-FlowLogProperty -Object (Get-FlowLogProperty -Object $FlowLog -Name 'properties') -Name 'provisioningState'
+    }
+    $identity = Get-FlowLogProperty -Object $FlowLog -Name 'identity'
+    if ($null -eq $identity) {
+        $identity = Get-FlowLogProperty -Object (Get-FlowLogProperty -Object $FlowLog -Name 'properties') -Name 'identity'
+    }
+    $identityType = Get-FlowLogProperty -Object $identity -Name 'type'
+    $hasIdentity = $null -ne $identityType -and -not [string]::IsNullOrWhiteSpace([string]$identityType) -and [string]$identityType -ne 'None'
 
     [pscustomobject]@{
         SubscriptionId        = $SubscriptionId
@@ -171,6 +249,8 @@ function ConvertTo-FlowLogConfig {
         StorageAccount        = $storage.Name
         StorageSubscriptionId = $storage.SubscriptionId
         StorageResourceGroup  = $storage.ResourceGroup
+        ProvisioningState     = if ($null -eq $provisioning -or [string]::IsNullOrWhiteSpace([string]$provisioning)) { $null } else { [string]$provisioning }
+        HasManagedIdentity    = [bool]$hasIdentity
     }
 }
 
@@ -187,10 +267,15 @@ function ConvertTo-FlowLogStorageRef {
 }
 
 function Get-FlowLogTargetKind {
+    # A subnet id also contains /virtualNetworks/, so subnet is tested before the virtual network.
     param([string]$TargetId)
 
-    if ($TargetId -match '/providers/Microsoft\.Network/networkSecurityGroups/[^/]+$') { return 'NSG' }
-    if ($TargetId -match '/providers/Microsoft\.Network/virtualNetworks/[^/]+$') { return 'VNet' }
+    if ([string]::IsNullOrEmpty($TargetId)) { return 'Other' }
+    $lower = $TargetId.ToLowerInvariant()
+    if ($lower.Contains('/networksecuritygroups/')) { return 'NSG' }
+    if ($lower.Contains('/networkinterfaces/')) { return 'NIC' }
+    if ($lower.Contains('/subnets/')) { return 'Subnet' }
+    if ($lower.Contains('/virtualnetworks/')) { return 'VNet' }
     return 'Other'
 }
 

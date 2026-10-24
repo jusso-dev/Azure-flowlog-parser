@@ -9,4 +9,4 @@ foreach ($folder in 'Private', 'Public') {
     }
 }
 
-Export-ModuleMember -Function 'Get-FlowLogInventory', 'Get-FlowLogTraffic', 'Get-FlowLogRecord'
+Export-ModuleMember -Function 'Get-FlowLogInventory', 'Get-FlowLogTraffic', 'Get-FlowLogRecord', 'Get-FlowLogDiagnosis'

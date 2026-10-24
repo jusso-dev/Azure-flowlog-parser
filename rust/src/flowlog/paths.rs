@@ -16,11 +16,15 @@ pub fn day_prefix(target_resource_id: &str, day: NaiveDate) -> String {
     format!("resourceId={}/y={}/", target_resource_id.to_uppercase(), day.format("%Y/m=%m/d=%d"))
 }
 
-/// "NSG", "VNet" or "Other", from the ARM type segment of the target.
+/// "NSG", "NIC", "Subnet", "VNet" or "Other". A subnet id also contains `/virtualNetworks/`, so subnet is tested first.
 pub fn target_kind(target_resource_id: &str) -> &'static str {
     let lower = target_resource_id.to_ascii_lowercase();
     if lower.contains("/networksecuritygroups/") {
         "NSG"
+    } else if lower.contains("/networkinterfaces/") {
+        "NIC"
+    } else if lower.contains("/subnets/") {
+        "Subnet"
     } else if lower.contains("/virtualnetworks/") {
         "VNet"
     } else {
@@ -82,6 +86,16 @@ mod tests {
         assert_eq!(
             target_kind("/subscriptions/0000/resourceGroups/rg/providers/Microsoft.Network/VirtualNetworks/vnet"),
             "VNet"
+        );
+        assert_eq!(
+            target_kind(
+                "/subscriptions/0000/resourceGroups/rg/providers/Microsoft.Network/virtualNetworks/vnet/subnets/app"
+            ),
+            "Subnet"
+        );
+        assert_eq!(
+            target_kind("/subscriptions/0000/resourceGroups/rg/providers/Microsoft.Network/networkInterfaces/nic1"),
+            "NIC"
         );
         assert_eq!(
             target_kind("/subscriptions/0000/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/st"),

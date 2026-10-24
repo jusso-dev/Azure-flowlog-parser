@@ -4,7 +4,9 @@ using Azure.ResourceManager;
 using Azure.ResourceManager.Network;
 using Azure.ResourceManager.Resources;
 using Azure.ResourceManager.Resources.Models;
+using Azure.ResourceManager.Models;
 using Azure.ResourceManager.Storage;
+using Azure.ResourceManager.Storage.Models;
 using AzureFlowLogParser.Models;
 
 namespace AzureFlowLogParser.Services.Discovery;
@@ -17,6 +19,7 @@ public sealed class AzureTopology
     public List<FlowLogConfigInfo> FlowLogs { get; } = new();
     public List<VnetInfo> Vnets { get; } = new();
     public List<NicInfo> Nics { get; } = new();
+    public List<NetworkWatcherRef> NetworkWatchers { get; } = new();
     public List<string> Warnings { get; } = new();
 }
 
@@ -29,11 +32,15 @@ public sealed record VnetInfo(
     string ResourceGroup,
     string SubscriptionId,
     IReadOnlyList<string> AddressPrefixes,
-    IReadOnlyList<SubnetInfo> Subnets);
+    IReadOnlyList<SubnetInfo> Subnets,
+    string Location);
 
-public sealed record SubnetInfo(IReadOnlyList<string> AddressPrefixes, string? NsgId);
+public sealed record SubnetInfo(IReadOnlyList<string> AddressPrefixes, string? NsgId, string Id, string Name);
 
-public sealed record NicInfo(string? NsgId, IReadOnlyList<string> PrivateIps);
+public sealed record NicInfo(string? NsgId, IReadOnlyList<string> PrivateIps, string Id, string Name, string Location, string? SubnetId);
+
+/// <summary>A Network Watcher in a scanned subscription. One per region.</summary>
+public sealed record NetworkWatcherRef(string SubscriptionId, string Name, string Location);
 
 /// <summary>
 /// Loads subscriptions, storage accounts, flow log configurations, VNets and NICs through the ARM SDK.
@@ -104,7 +111,7 @@ public sealed class ArmTopologyLoader
 
         await foreach (var account in subResource.GetStorageAccountsAsync(cancellationToken: cancellationToken))
         {
-            topology.StorageAccounts.Add(new StorageAccountInfo
+            var info = new StorageAccountInfo
             {
                 SubscriptionId = subscription.Id,
                 Name = account.Data.Name,
@@ -112,11 +119,18 @@ public sealed class ArmTopologyLoader
                 Location = account.Data.Location.ToString(),
                 Kind = account.Data.Kind?.ToString() ?? string.Empty,
                 SkuName = account.Data.Sku?.Name.ToString() ?? string.Empty
-            });
+            };
+            ApplyStorageAccess(info, account.Data);
+            topology.StorageAccounts.Add(info);
         }
 
         await foreach (var watcher in subResource.GetNetworkWatchersAsync(cancellationToken: cancellationToken))
         {
+            topology.NetworkWatchers.Add(new NetworkWatcherRef(
+                subscription.Id,
+                watcher.Id.Name,
+                watcher.Data.Location.ToString() ?? string.Empty));
+
             await foreach (var flowLog in watcher.GetFlowLogs().GetAllAsync(cancellationToken))
             {
                 var data = flowLog.Data;
@@ -140,7 +154,10 @@ public sealed class ArmTopologyLoader
                     TargetKind = FlowLogPaths.TargetKind(target),
                     Enabled = data.Enabled ?? false,
                     RetentionDays = data.RetentionPolicy?.Days ?? 0,
-                    TrafficAnalytics = data.NetworkWatcherFlowAnalyticsConfiguration?.Enabled ?? false
+                    TrafficAnalytics = data.NetworkWatcherFlowAnalyticsConfiguration?.Enabled ?? false,
+                    ProvisioningState = data.ProvisioningState?.ToString(),
+                    HasManagedIdentity = data.Identity?.ManagedServiceIdentityType is { } identityType
+                        && identityType != ManagedServiceIdentityType.None
                 });
             }
         }
@@ -153,7 +170,9 @@ public sealed class ArmTopologyLoader
                         .Where(p => !string.IsNullOrEmpty(p))
                         .Select(p => p!)
                         .ToList(),
-                    s.NetworkSecurityGroup?.Id?.ToString()))
+                    s.NetworkSecurityGroup?.Id?.ToString(),
+                    s.Id.ToString(),
+                    s.Name))
                 .ToList();
 
             topology.Vnets.Add(new VnetInfo(
@@ -162,7 +181,8 @@ public sealed class ArmTopologyLoader
                 vnet.Id.ResourceGroupName ?? string.Empty,
                 subscription.Id,
                 vnet.Data.AddressPrefixes.ToList(),
-                subnets));
+                subnets,
+                vnet.Data.Location.ToString() ?? string.Empty));
         }
 
         await foreach (var nic in subResource.GetNetworkInterfacesAsync(cancellationToken: cancellationToken))
@@ -173,7 +193,58 @@ public sealed class ArmTopologyLoader
                 .Select(ip => ip!)
                 .ToList();
 
-            topology.Nics.Add(new NicInfo(nic.Data.NetworkSecurityGroup?.Id?.ToString(), privateIps));
+            string? subnetId = null;
+            foreach (var ip in nic.Data.IPConfigurations)
+            {
+                if (ip.Subnet is not { } subnet)
+                {
+                    continue;
+                }
+
+                var id = subnet.Id.ToString();
+                if (!string.IsNullOrEmpty(id))
+                {
+                    subnetId = id;
+                    break;
+                }
+            }
+
+            topology.Nics.Add(new NicInfo(
+                nic.Data.NetworkSecurityGroup?.Id?.ToString(),
+                privateIps,
+                nic.Id.ToString(),
+                nic.Data.Name,
+                nic.Data.Location.ToString() ?? string.Empty,
+                subnetId));
         }
+    }
+
+    private static void ApplyStorageAccess(StorageAccountInfo info, StorageAccountData data)
+    {
+        info.PublicNetworkAccess = data.PublicNetworkAccess?.ToString();
+        info.AllowSharedKeyAccess = data.AllowSharedKeyAccess;
+        var rules = data.NetworkRuleSet;
+        if (rules is null)
+        {
+            return;
+        }
+
+        info.NetworkDefaultAction = rules.DefaultAction.ToString();
+        info.AllowsTrustedServices = TrustedServicesAllowed(rules.Bypass);
+    }
+
+    /// <summary>
+    /// Bypass is a comma-separated extensible value such as "Logging, Metrics, AzureServices", not a flags enum.
+    /// </summary>
+    private static bool TrustedServicesAllowed(StorageNetworkBypass? bypass)
+    {
+        if (bypass is not { } value)
+        {
+            return false;
+        }
+
+        return value.ToString()
+            .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .Any(part => part.Equals(nameof(StorageNetworkBypass.AzureServices), StringComparison.OrdinalIgnoreCase));
     }
 }

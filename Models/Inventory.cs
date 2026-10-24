@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace AzureFlowLogParser.Models;
 
 /// <summary>
@@ -42,6 +44,19 @@ public sealed class StorageAccountInfo
     public string Status { get; set; } = FlowStatus.NoFlowLogs;
     public string? LatestBlobUtc { get; set; }
     public string? ObservedTarget { get; set; }
+
+    // Read from the storage account for diagnosis. Omitted from discover JSON.
+    [JsonIgnore]
+    public string? PublicNetworkAccess { get; set; }
+
+    [JsonIgnore]
+    public string? NetworkDefaultAction { get; set; }
+
+    [JsonIgnore]
+    public bool? AllowsTrustedServices { get; set; }
+
+    [JsonIgnore]
+    public bool? AllowSharedKeyAccess { get; set; }
 }
 
 /// <summary>
@@ -65,6 +80,13 @@ public sealed class FlowLogConfigInfo
     public string? LatestBlobUtc { get; set; }
     public double? AgeHours { get; set; }
     public string Message { get; set; } = string.Empty;
+
+    // Read from the flow log for diagnosis. Omitted from discover JSON.
+    [JsonIgnore]
+    public string? ProvisioningState { get; set; }
+
+    [JsonIgnore]
+    public bool HasManagedIdentity { get; set; }
 }
 
 /// <summary>

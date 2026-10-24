@@ -24,7 +24,8 @@ use super::client::AzureClient;
 use super::http::{describe_failure, ensure_success, send_with_retry, transport_failure};
 use crate::flowlog::paths::{last_segment, resource_group_of, target_kind, target_name, target_resource_group};
 use crate::model::{
-    AzureTopology, FlowLogConfigInfo, NicInfo, StorageAccountInfo, SubnetInfo, SubscriptionRef, VnetInfo,
+    AzureTopology, FlowLogConfigInfo, NetworkWatcherRef, NicInfo, StorageAccountInfo, SubnetInfo, SubscriptionRef,
+    VnetInfo,
 };
 
 const ARM: &str = "https://management.azure.com";
@@ -80,6 +81,23 @@ pub struct StorageAccountItem {
     pub location: String,
     pub kind: Option<String>,
     pub sku: Option<Sku>,
+    #[serde(default)]
+    pub properties: StorageAccountProperties,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageAccountProperties {
+    pub public_network_access: Option<String>,
+    pub allow_shared_key_access: Option<bool>,
+    pub network_acls: Option<NetworkAcls>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkAcls {
+    pub bypass: Option<String>,
+    pub default_action: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -90,14 +108,25 @@ pub struct Sku {
 #[derive(Debug, Deserialize)]
 pub struct WatcherItem {
     pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub location: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct FlowLogItem {
     pub name: String,
     pub location: Option<String>,
+    pub identity: Option<FlowLogIdentity>,
     #[serde(default)]
     pub properties: FlowLogProperties,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FlowLogIdentity {
+    #[serde(rename = "type")]
+    pub identity_type: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -108,6 +137,7 @@ pub struct FlowLogProperties {
     pub enabled: Option<bool>,
     pub retention_policy: Option<RetentionPolicy>,
     pub flow_analytics_configuration: Option<TrafficAnalyticsProperties>,
+    pub provisioning_state: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -131,6 +161,8 @@ pub struct VnetItem {
     pub id: String,
     pub name: String,
     #[serde(default)]
+    pub location: String,
+    #[serde(default)]
     pub properties: VnetProperties,
 }
 
@@ -152,6 +184,10 @@ pub struct AddressSpace {
 #[derive(Debug, Deserialize)]
 pub struct SubnetItem {
     #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
     pub properties: SubnetProperties,
 }
 
@@ -171,6 +207,12 @@ pub struct IdReference {
 
 #[derive(Debug, Deserialize)]
 pub struct NicItem {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub location: String,
     #[serde(default)]
     pub properties: NicProperties,
 }
@@ -192,6 +234,7 @@ pub struct IpConfiguration {
 pub struct IpConfigurationProperties {
     #[serde(rename = "privateIPAddress")]
     pub private_ip_address: Option<String>,
+    pub subnet: Option<IdReference>,
 }
 
 // ---------- Mapping (pure) ----------
@@ -210,6 +253,10 @@ pub fn enabled_subscriptions(items: Vec<SubscriptionItem>) -> Vec<SubscriptionRe
 }
 
 pub fn storage_account(subscription_id: &str, item: &StorageAccountItem) -> StorageAccountInfo {
+    let (network_default_action, allows_trusted_services) = match &item.properties.network_acls {
+        None => (None, None),
+        Some(rules) => (rules.default_action.clone(), Some(trusted_services(rules.bypass.as_deref()))),
+    };
     StorageAccountInfo {
         subscription_id: subscription_id.to_string(),
         name: item.name.clone(),
@@ -217,8 +264,17 @@ pub fn storage_account(subscription_id: &str, item: &StorageAccountItem) -> Stor
         location: item.location.clone(),
         kind: item.kind.clone().unwrap_or_default(),
         sku_name: item.sku.as_ref().and_then(|sku| sku.name.clone()).unwrap_or_default(),
+        public_network_access: item.properties.public_network_access.clone(),
+        network_default_action,
+        allows_trusted_services,
+        allow_shared_key_access: item.properties.allow_shared_key_access,
         ..Default::default()
     }
+}
+
+/// Bypass is a comma-separated list such as "Logging, Metrics, AzureServices". Missing bypass is not an exception.
+fn trusted_services(bypass: Option<&str>) -> bool {
+    bypass.is_some_and(|value| value.split(',').any(|part| part.trim().eq_ignore_ascii_case("AzureServices")))
 }
 
 /// Flow log configuration with its storage account (last segment of storageId). Entries without a storage id or a
@@ -233,6 +289,7 @@ pub fn flow_log_config(subscription_id: &str, watcher_name: &str, item: FlowLogI
         .and_then(|config| config.network_watcher_flow_analytics_configuration)
         .and_then(|config| config.enabled)
         .unwrap_or(false);
+    let identity_type = item.identity.and_then(|identity| identity.identity_type);
     Some(FlowLogConfigInfo {
         subscription_id: subscription_id.to_string(),
         name: item.name,
@@ -246,6 +303,10 @@ pub fn flow_log_config(subscription_id: &str, watcher_name: &str, item: FlowLogI
         enabled: properties.enabled.unwrap_or(false),
         retention_days: properties.retention_policy.and_then(|policy| policy.days).unwrap_or(0),
         traffic_analytics,
+        provisioning_state: properties.provisioning_state.filter(|state| !state.is_empty()),
+        has_managed_identity: identity_type
+            .as_deref()
+            .is_some_and(|kind| !kind.is_empty() && !kind.eq_ignore_ascii_case("None")),
         ..Default::default()
     })
 }
@@ -267,6 +328,8 @@ pub fn vnet(subscription_id: &str, item: VnetItem) -> VnetInfo {
             SubnetInfo {
                 address_prefixes: prefixes.into_iter().filter(|prefix| !prefix.is_empty()).collect(),
                 nsg_id: properties.network_security_group.and_then(|nsg| nsg.id),
+                id: subnet.id,
+                name: subnet.name,
             }
         })
         .collect();
@@ -277,19 +340,34 @@ pub fn vnet(subscription_id: &str, item: VnetItem) -> VnetInfo {
         subscription_id: subscription_id.to_string(),
         address_prefixes,
         subnets,
+        location: item.location,
     }
 }
 
 pub fn nic(item: NicItem) -> NicInfo {
+    let subnet_id = item.properties.ip_configurations.iter().find_map(|config| {
+        let id = config
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.subnet.as_ref())
+            .and_then(|subnet| subnet.id.clone());
+        id.filter(|value| !value.is_empty())
+    });
     NicInfo {
         nsg_id: item.properties.network_security_group.and_then(|nsg| nsg.id),
         private_ips: item
             .properties
             .ip_configurations
-            .into_iter()
-            .filter_map(|config| config.properties.and_then(|properties| properties.private_ip_address))
+            .iter()
+            .filter_map(|config| {
+                config.properties.as_ref().and_then(|properties| properties.private_ip_address.clone())
+            })
             .filter(|ip| !ip.is_empty())
             .collect(),
+        id: item.id,
+        name: item.name,
+        location: item.location,
+        subnet_id,
     }
 }
 
@@ -367,7 +445,12 @@ async fn load_subscription(
     let watchers: Vec<WatcherItem> =
         list_all(client, format!("{providers}/Microsoft.Network/networkWatchers?api-version={NETWORK_API}")).await?;
     for watcher in &watchers {
-        let watcher_name = last_segment(&watcher.id);
+        let watcher_name = if watcher.name.is_empty() { last_segment(&watcher.id) } else { watcher.name.clone() };
+        topology.network_watchers.push(NetworkWatcherRef {
+            subscription_id: sub.to_string(),
+            name: watcher_name.clone(),
+            location: watcher.location.clone(),
+        });
         let url = format!(
             "{ARM}/subscriptions/{sub}/resourceGroups/{}/providers/Microsoft.Network/networkWatchers/{watcher_name}/flowLogs?api-version={NETWORK_API}",
             resource_group_of(&watcher.id)
@@ -439,6 +522,8 @@ mod tests {
         assert_eq!(mapped[0].location, "australiaeast");
         assert_eq!(mapped[0].subscription_id, "sub-1");
         assert_eq!(mapped[1].sku_name, "Standard_LRS");
+        assert_eq!(mapped[0].allows_trusted_services, None);
+        assert_eq!(mapped[0].allow_shared_key_access, None);
     }
 
     #[test]
@@ -467,6 +552,9 @@ mod tests {
         assert!(!second.enabled);
         assert!(!second.traffic_analytics);
         assert_eq!(second.retention_days, 0);
+        assert_eq!(first.provisioning_state.as_deref(), Some("Succeeded"));
+        assert!(!first.has_managed_identity);
+        assert_eq!(second.provisioning_state, None);
     }
 
     #[test]
@@ -487,6 +575,10 @@ mod tests {
         assert_eq!(mapped.subnets[1].address_prefixes, vec!["10.10.2.0/24", "10.10.3.0/24"]);
         assert_eq!(mapped.subnets[1].nsg_id, None);
         assert!(mapped.subnets[2].address_prefixes.is_empty());
+        assert_eq!(mapped.location, "australiaeast");
+        assert_eq!(mapped.subnets[0].name, "app");
+        assert!(mapped.subnets[0].id.ends_with("/subnets/app"));
+        assert_eq!(mapped.subnets[1].id, "");
     }
 
     #[test]
@@ -496,6 +588,10 @@ mod tests {
         assert!(mapped[0].nsg_id.as_deref().unwrap().ends_with("/web-nsg"));
         assert!(mapped[1].private_ips.is_empty());
         assert_eq!(mapped[1].nsg_id, None);
+        assert_eq!(mapped[0].name, "web-vm-nic");
+        assert_eq!(mapped[0].location, "australiaeast");
+        assert_eq!(mapped[0].subnet_id, None);
+        assert!(mapped[0].id.ends_with("/web-vm-nic"));
     }
 
     #[test]

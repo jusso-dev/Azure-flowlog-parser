@@ -24,6 +24,8 @@ public partial class AppJsonContext : JsonSerializerContext
 /// </summary>
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase, WriteIndented = true)]
 [JsonSerializable(typeof(InventoryResult))]
+[JsonSerializable(typeof(DiagnosisResult))]
+[JsonSerializable(typeof(List<FlowLogFinding>))]
 [JsonSerializable(typeof(List<DenormalizedFlowRecord>))]
 public partial class IndentedJsonContext : JsonSerializerContext
 {

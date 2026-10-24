@@ -2,7 +2,7 @@
 
 A .NET 10 CLI tool that fetches Azure virtual network flow logs from Azure Storage accounts using Entra ID credentials (managed identity, Azure CLI, or service principal) and parses them into denormalized records.
 
-It also **discovers** every storage account per subscription that receives flow logs or contains them, **monitors** whether flow logs are still being written, and produces an interactive **HTML** or static **PDF** **traffic report** showing flows between storage accounts and for each account individually. The same functionality is available as PowerShell modules in [`powershell/`](powershell/README.md), which reach Azure through the Azure CLI (`az`) rather than the Az PowerShell modules.
+It also **discovers** every storage account per subscription that receives flow logs or contains them, **monitors** whether flow logs are still being written, **diagnoses** why a virtual network, subnet, NIC, or attached network security group is not sending flow logs to storage, and produces an interactive **HTML** or static **PDF** **traffic report** showing flows between storage accounts and for each account individually. The same functionality is available as PowerShell modules in [`powershell/`](powershell/README.md), which reach Azure through the Azure CLI (`az`) rather than the Az PowerShell modules.
 
 ## Features
 
@@ -66,7 +66,7 @@ dotnet run -- --storage-account <account-name> [options]
 
 ### Standalone binaries (no runtime needed)
 
-Two builds of the same tool are available. Both produce one executable with the same subcommands (`discover`, `report`, and the root parse command).
+Two builds of the same tool are available. Both produce one executable with the same subcommands (`discover`, `diagnose`, `report`, and the root parse command).
 
 **.NET, native AOT** (ahead-of-time compiled, self-contained; about 29 MB on macOS arm64):
 
@@ -346,6 +346,40 @@ A storage account is listed when it is the destination of a flow log configurati
 
 An account's status is the worst status among its configurations. Accounts whose container cannot be read (`AccessDenied`) are listed even without a proven flow log, so the gap is visible; `--all` adds accounts with neither flow logs nor blobs.
 
+### Diagnose sources that are not sending flow logs
+
+```bash
+# Every virtual network, subnet, NIC, and attached NSG that is not writing to storage
+azure-flowlog-parser diagnose
+
+# JSON, one subscription, flag blobs older than 6 hours
+azure-flowlog-parser diagnose --subscription <sub-id> --stale-hours 6 --output-format json -o gaps.json
+
+# Hide gaps for other storage accounts. Sources with no flow log are still listed.
+azure-flowlog-parser diagnose --storage-account stflowlogs01
+```
+
+The sweep uses the same Azure reads as `discover` (Reader on the subscriptions, plus Storage Blob Data Reader to list blobs). A source is left off the list when a delivering flow log covers it. Delivering means the flow log is enabled, its status is `Healthy`, and a blob timestamp was found. An enabled flow log on a NIC wins over its subnet, which wins over its virtual network. The command exits 0 when the sweep finishes, including when it finds gaps.
+
+| Reason | Meaning |
+|--------|---------|
+| `NotConfigured` | No flow log targets this source or a covering parent |
+| `NetworkWatcherMissing` | No Network Watcher in the source's region |
+| `Disabled` | The flow log that would cover this source is disabled |
+| `ProvisioningFailed` | Provisioning state is set and is not `Succeeded` or `Updating` |
+| `TargetMissing` | The flow log's target is not in the scanned subscriptions |
+| `StorageMissing` | The destination storage account is not in the scanned subscriptions |
+| `RegionMismatch` | The storage account is in a different region from the source |
+| `UnsupportedStorage` | Premium SKU, `FileStorage`, or `BlockBlobStorage` |
+| `StorageFirewall` | Trusted Azure services are off, and public access is disabled or the default action is Deny |
+| `SharedKeyDisabled` | Shared key access is off and the flow log has no managed identity |
+| `AccessDenied` | Blobs could not be listed |
+| `Error` | The health check failed |
+| `NoData` | Enabled, and the account can accept logs, but no blobs in the last two days |
+| `Stale` | Newest blob is older than `--stale-hours` |
+
+`NoData` also says that rotating the storage account keys stops flow logs until the flow log is disabled and enabled again. That is a hint, not proof the keys were rotated. The blob check reads `insights-logs-flowlogflowevent`. NSG flow logs are stored in `insights-logs-networksecuritygroupflowevent`, so an empty result does not prove that container is empty. NSG flow logs retire on 30 Sep 2027 and new ones cannot be created. A storage account with hierarchical namespace is not treated as a blocker. A firewall that allows trusted Microsoft services is not treated as a blocker.
+
 ### Generate a traffic report
 
 ```bash
@@ -387,7 +421,7 @@ Sample reports generated from the offline data in [`examples/`](examples/README.
 
 ## Rust port: differences from the .NET tool
 
-The Rust binary implements the same report, discovery and parse behaviour. Offline reports (`--input`) produce payloads identical to the .NET tool on the committed examples. These differences remain:
+The Rust binary implements the same report, discovery, diagnose and parse behaviour. Offline reports (`--input`) produce payloads identical to the .NET tool on the committed examples. These differences remain:
 
 - **Short options:** the .NET multi-letter aliases (`-af`, `-ae`, `-akv`, `-kvs`, `-he`, `-ht`, `-hc`, `-hkv`, `-hes`, `-hts`, `-st`, `-fr`) are not available; use the long names. Single-letter shorts (`-s`, `-c`, `-p`, `-o`, `-f`, `-l`, `-v`, `-m`) are the same.
 - **JSON keys:** case-sensitive in Rust. The .NET reader accepts any casing for flow log blobs and topology files. Azure writes the standard casing.

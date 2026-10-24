@@ -150,11 +150,26 @@ mod tests {
                     SubnetInfo {
                         address_prefixes: vec!["10.10.1.0/24".to_string()],
                         nsg_id: Some(NSG_APP.to_uppercase()),
+                        id: String::new(),
+                        name: String::new(),
                     },
-                    SubnetInfo { address_prefixes: vec!["10.10.2.0/24".to_string()], nsg_id: None },
+                    SubnetInfo {
+                        address_prefixes: vec!["10.10.2.0/24".to_string()],
+                        nsg_id: None,
+                        id: String::new(),
+                        name: String::new(),
+                    },
                 ],
+                location: String::new(),
             }],
-            nics: vec![NicInfo { nsg_id: Some(NSG_APP.to_string()), private_ips: vec!["10.10.1.4".to_string()] }],
+            nics: vec![NicInfo {
+                nsg_id: Some(NSG_APP.to_string()),
+                private_ips: vec!["10.10.1.4".to_string()],
+                id: String::new(),
+                name: String::new(),
+                location: String::new(),
+                subnet_id: None,
+            }],
             ..Default::default()
         }
     }

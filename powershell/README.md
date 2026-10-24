@@ -1,8 +1,8 @@
 # Azure flow log PowerShell modules
 
-PowerShell 7.6 port of the `report` and `discover` commands. Two modules:
+PowerShell 7.6 port of the `report`, `discover`, and `diagnose` commands. Two modules:
 
-- `AzureFlowLogParser`: discovery, health and aggregation. Exports `Get-FlowLogInventory` and `Get-FlowLogTraffic`.
+- `AzureFlowLogParser`: discovery, diagnosis, health and aggregation. Exports `Get-FlowLogInventory`, `Get-FlowLogDiagnosis`, and `Get-FlowLogTraffic`.
 - `AzureFlowLogReport`: renders the traffic model as HTML or PDF. Exports `Export-FlowLogReport`.
 
 The shared rules (parsing, topology, dedupe, health, report contents) are in the spec that both the .NET CLI and these modules follow.
@@ -41,6 +41,19 @@ Get-FlowLogInventory -SubscriptionId 00000000-0000-0000-0000-000000000000 `
 ```
 
 Returns `schema`, `generatedUtc`, `source`, `subscriptions`, `accounts`, `flowLogs` and `notes`.
+
+### Diagnosis
+
+```powershell
+# Virtual networks, subnets, NICs, and attached NSGs that are not sending flow logs, and why
+Get-FlowLogDiagnosis
+
+# One subscription, JSON, 6h staleness. -StorageAccountName hides other accounts; unconfigured sources stay.
+Get-FlowLogDiagnosis -SubscriptionId 00000000-0000-0000-0000-000000000000 -StaleAfterHours 6 |
+    ConvertTo-Json -Depth 6
+```
+
+Same Azure reads and permissions as `Get-FlowLogInventory`. Reason codes match `azure-flowlog-parser diagnose` (`NotConfigured`, `NetworkWatcherMissing`, `Disabled`, `ProvisioningFailed`, `TargetMissing`, `StorageMissing`, `RegionMismatch`, `UnsupportedStorage`, `StorageFirewall`, `SharedKeyDisabled`, `AccessDenied`, `Error`, `NoData`, `Stale`). The blob check reads `insights-logs-flowlogflowevent`. NSG flow logs live in `insights-logs-networksecuritygroupflowevent`, so an empty result does not prove that container is empty. A `NoData` message mentions storage key rotation as a hint, not as proof.
 
 ### Traffic report model
 
@@ -117,6 +130,9 @@ State tracking is on by default. For each blob the function reads its metadata a
 | .NET (`azure-flowlog-parser`) | PowerShell |
 |---|---|
 | `discover --subscription` | `Get-FlowLogInventory -SubscriptionId` |
+| `diagnose` | `Get-FlowLogDiagnosis` |
+| `diagnose --storage-account` | `Get-FlowLogDiagnosis -StorageAccountName` |
+| `diagnose --stale-hours` | `Get-FlowLogDiagnosis -StaleAfterHours` |
 | `discover --storage-account` | `-StorageAccountName` |
 | `discover --stale-hours` | `-StaleAfterHours` |
 | `discover --all` | `-IncludeAll` |

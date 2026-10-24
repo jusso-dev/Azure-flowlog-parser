@@ -9,7 +9,7 @@ use clap::{ArgAction, Args, Parser, Subcommand};
 #[command(
     name = "azure-flowlog-parser",
     version,
-    about = "Fetch and parse Azure VNet flow logs; discover storage accounts; build traffic reports"
+    about = "Fetch and parse Azure VNet flow logs; discover storage accounts; diagnose missing flow logs; build traffic reports"
 )]
 pub struct Cli {
     #[command(flatten)]
@@ -23,6 +23,8 @@ pub struct Cli {
 pub enum Command {
     /// List storage accounts that receive flow logs or hold flow log blobs, with health per configuration.
     Discover(DiscoverArgs),
+    /// Find virtual networks, subnets, NICs, and NSGs that are not sending flow logs to storage, and why.
+    Diagnose(DiagnoseArgs),
     /// Aggregate flow observations between storage accounts into an HTML or PDF report.
     Report(ReportArgs),
 }
@@ -115,6 +117,28 @@ pub struct DiscoverArgs {
     /// Also list accounts with neither flow log configurations nor flow log blobs.
     #[arg(long)]
     pub all: bool,
+    /// table (default) or json.
+    #[arg(long, default_value = "table")]
+    pub output_format: String,
+    /// Write output to this file instead of stdout.
+    #[arg(long, short = 'o')]
+    pub output: Option<PathBuf>,
+    /// Print progress to stderr.
+    #[arg(long, short = 'v')]
+    pub verbose: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct DiagnoseArgs {
+    /// Subscription id to scan (repeat for several). Default: every enabled subscription the identity can read.
+    #[arg(long = "subscription")]
+    pub subscriptions: Vec<String>,
+    /// Only show gaps for these storage accounts. Sources with no flow log are still listed.
+    #[arg(long, short = 's')]
+    pub storage_account: Vec<String>,
+    /// A flow log is Stale when its newest blob is older than this many hours.
+    #[arg(long, default_value_t = 3)]
+    pub stale_hours: u32,
     /// table (default) or json.
     #[arg(long, default_value = "table")]
     pub output_format: String,

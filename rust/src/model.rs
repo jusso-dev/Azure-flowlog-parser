@@ -55,6 +55,15 @@ pub struct StorageAccountInfo {
     pub status: String,
     pub latest_blob_utc: Option<String>,
     pub observed_target: Option<String>,
+    /// Storage firewall and key settings used by diagnose. Omitted from discover JSON.
+    #[serde(skip)]
+    pub public_network_access: Option<String>,
+    #[serde(skip)]
+    pub network_default_action: Option<String>,
+    #[serde(skip)]
+    pub allows_trusted_services: Option<bool>,
+    #[serde(skip)]
+    pub allow_shared_key_access: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -80,6 +89,11 @@ pub struct FlowLogConfigInfo {
     pub latest_blob_utc: Option<String>,
     pub age_hours: Option<f64>,
     pub message: String,
+    /// Flow log provisioning state and identity, used by diagnose. Omitted from discover JSON.
+    #[serde(skip)]
+    pub provisioning_state: Option<String>,
+    #[serde(skip)]
+    pub has_managed_identity: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -128,18 +142,32 @@ pub struct VnetInfo {
     pub subscription_id: String,
     pub address_prefixes: Vec<String>,
     pub subnets: Vec<SubnetInfo>,
+    pub location: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SubnetInfo {
     pub address_prefixes: Vec<String>,
     pub nsg_id: Option<String>,
+    pub id: String,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct NicInfo {
     pub nsg_id: Option<String>,
     pub private_ips: Vec<String>,
+    pub id: String,
+    pub name: String,
+    pub location: String,
+    pub subnet_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct NetworkWatcherRef {
+    pub subscription_id: String,
+    pub name: String,
+    pub location: String,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -149,7 +177,75 @@ pub struct AzureTopology {
     pub flow_logs: Vec<FlowLogConfigInfo>,
     pub vnets: Vec<VnetInfo>,
     pub nics: Vec<NicInfo>,
+    pub network_watchers: Vec<NetworkWatcherRef>,
     pub warnings: Vec<String>,
+}
+
+// ---------- Diagnose ----------
+
+/// Why a virtual network, subnet, NIC, or NSG is not writing flow logs to a storage account.
+pub mod diagnosis_reason {
+    pub const NOT_CONFIGURED: &str = "NotConfigured";
+    pub const NETWORK_WATCHER_MISSING: &str = "NetworkWatcherMissing";
+    pub const DISABLED: &str = "Disabled";
+    pub const PROVISIONING_FAILED: &str = "ProvisioningFailed";
+    pub const TARGET_MISSING: &str = "TargetMissing";
+    pub const STORAGE_MISSING: &str = "StorageMissing";
+    pub const REGION_MISMATCH: &str = "RegionMismatch";
+    pub const UNSUPPORTED_STORAGE: &str = "UnsupportedStorage";
+    pub const STORAGE_FIREWALL: &str = "StorageFirewall";
+    pub const SHARED_KEY_DISABLED: &str = "SharedKeyDisabled";
+    pub const ERROR: &str = "Error";
+    pub const ACCESS_DENIED: &str = "AccessDenied";
+    pub const NO_DATA: &str = "NoData";
+    pub const STALE: &str = "Stale";
+
+    /// Worst first. Used when several enabled flow logs target one source and none is delivering.
+    const SEVERITY: [&str; 14] = [
+        PROVISIONING_FAILED,
+        TARGET_MISSING,
+        STORAGE_MISSING,
+        REGION_MISMATCH,
+        UNSUPPORTED_STORAGE,
+        STORAGE_FIREWALL,
+        SHARED_KEY_DISABLED,
+        ERROR,
+        ACCESS_DENIED,
+        NO_DATA,
+        STALE,
+        DISABLED,
+        NETWORK_WATCHER_MISSING,
+        NOT_CONFIGURED,
+    ];
+
+    pub fn rank(reason: &str) -> usize {
+        SEVERITY.iter().position(|item| *item == reason).unwrap_or(SEVERITY.len())
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FlowLogFinding {
+    pub subscription_id: String,
+    pub resource_group: String,
+    pub location: String,
+    pub kind: String,
+    pub name: String,
+    pub resource_id: String,
+    pub reason: String,
+    pub flow_log: String,
+    pub storage_account: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagnosisResult {
+    pub generated_utc: String,
+    pub stale_after_hours: u32,
+    pub source_count: usize,
+    pub finding_count: usize,
+    pub findings: Vec<FlowLogFinding>,
 }
 
 // ---------- Flow log observations ----------
@@ -310,5 +406,26 @@ mod tests {
         let config: FlowLogConfigInfo = serde_json::from_str(json).unwrap();
 
         assert_eq!((config.target_name.as_str(), config.target_resource_group.as_str()), ("", ""));
+    }
+
+    #[test]
+    fn diagnostic_fields_stay_out_of_inventory_json() {
+        let account = StorageAccountInfo {
+            allows_trusted_services: Some(false),
+            public_network_access: Some("Disabled".into()),
+            ..Default::default()
+        };
+        let account_json = serde_json::to_string(&account).unwrap();
+        assert!(!account_json.contains("allowsTrustedServices"));
+        assert!(!account_json.contains("publicNetworkAccess"));
+
+        let config = FlowLogConfigInfo {
+            provisioning_state: Some("Failed".into()),
+            has_managed_identity: true,
+            ..Default::default()
+        };
+        let config_json = serde_json::to_string(&config).unwrap();
+        assert!(!config_json.contains("provisioningState"));
+        assert!(!config_json.contains("hasManagedIdentity"));
     }
 }

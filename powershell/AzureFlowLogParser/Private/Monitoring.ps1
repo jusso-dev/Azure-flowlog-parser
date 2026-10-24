@@ -214,5 +214,6 @@ function Get-FlowLogMonitoring {
         TopologyNotes     = $topologyNotes.ToArray()
         Warnings          = $warnings.ToArray()
         Notes             = @($topologyNotes) + @($warnings)
+        ArmData           = $armData.ToArray()
     }
 }

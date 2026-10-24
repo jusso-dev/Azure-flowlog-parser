@@ -26,6 +26,17 @@ public static partial class FlowLogPaths
             return "NSG";
         }
 
+        if (targetResourceId.Contains("/networkInterfaces/", StringComparison.OrdinalIgnoreCase))
+        {
+            return "NIC";
+        }
+
+        // A subnet id also contains /virtualNetworks/, so the subnet segment wins.
+        if (targetResourceId.Contains("/subnets/", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Subnet";
+        }
+
         if (targetResourceId.Contains("/virtualNetworks/", StringComparison.OrdinalIgnoreCase))
         {
             return "VNet";
